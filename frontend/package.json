@@ -1,0 +1,51 @@
+{
+  "name": "vue",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js --fix",
+    "format": "prettier --write \"src/**/*.{js,vue,css,json,md}\"",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{js,vue}": "eslint --fix",
+    "*.{js,vue,css,json,css,md}": "prettier --write"
+  },
+  "dependencies": {
+    "@microsoft/fetch-event-source": "^2.0.1",
+    "@primevue/themes": "^4.5.3",
+    "axios": "^1.13.2",
+    "chart.js": "^4.5.1",
+    "compression": "^1.8.1",
+    "dompurify": "^3.3.1",
+    "express": "^5.2.1",
+    "marked": "^17.0.1",
+    "primeicons": "^7.0.0",
+    "primevue": "^4.5.3",
+    "pronghorn-monorepo": "file:..",
+    "vue": "^3.5.24",
+    "vue-i18n": "^9.13.1",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/eslint-config-prettier": "^10.2.0",
+    "autoprefixer": "^10.4.22",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-vue": "^10.6.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "postcss": "^8.5.6",
+    "prettier": "^3.7.4",
+    "tailwindcss": "^3.4.19",
+    "terser": "^5.44.1",
+    "vite": "^7.2.4",
+    "vite-plugin-vue-devtools": "^8.0.5",
+    "vue-chartjs": "^5.3.1"
+  }
+}

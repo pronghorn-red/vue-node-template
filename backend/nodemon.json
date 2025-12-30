@@ -1,0 +1,28 @@
+{
+  "watch": [
+    "src/**/*.js",
+    "src/**/*.json"
+  ],
+  "ext": "js,json",
+  "ignore": [
+    "src/**/*.test.js",
+    "src/**/*.spec.js",
+    "logs/*",
+    "node_modules/*",
+    "../frontend/*",
+    "../frontend/dist/*",
+    "../frontend/node_modules/*",
+    "coverage/*",
+    ".git/*"
+  ],
+  "delay": 1000,
+  "verbose": false,
+  "legacyWatch": false,
+  "execMap": {
+    "js": "node"
+  },
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "signal": "SIGTERM"
+}

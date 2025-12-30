@@ -1,0 +1,70 @@
+{
+  "name": "pronghorn-backend",
+  "version": "3.0.0",
+  "description": "Pronghorn Backend API Server with multi-provider LLM support",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "cross-env NODE_ENV=production node src/server.js",
+    "start:secure": "cross-env NODE_ENV=production node --permission --allow-fs-read='../*' --allow-fs-write='./*' src/server.js",
+    "lint": "eslint src --ext .js --fix",
+    "format": "prettier --write \"src/**/*.js\"",
+    "db:migrate": "node src/database/migrate.js",
+    "db:seed": "node src/database/seed.js",
+    "test": "jest --coverage"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
+    "@azure/msal-node": "^3.8.4",
+    "@google/genai": "^1.34.0",
+    "axios": "^1.13.2",
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
+    "connect-history-api-fallback": "^2.0.0",
+    "connect-pg-simple": "^10.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "express-session": "^1.18.2",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "openai": "^6.15.0",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "passport-local": "^1.0.0",
+    "pg": "^8.16.3",
+    "pronghorn-monorepo": "file:..",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^13.0.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0",
+    "eslint": "^9.39.2",
+    "jest": "^30.2.0",
+    "nodemon": "^3.1.11",
+    "prettier": "^3.7.4"
+  },
+  "nodemonConfig": {
+    "watch": [
+      "src"
+    ],
+    "ext": "js,json",
+    "ignore": [
+      "src/**/*.test.js",
+      "logs/*",
+      "../frontend/*",
+      "node_modules/*"
+    ],
+    "delay": 1000
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

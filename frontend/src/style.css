@@ -1,0 +1,676 @@
+/* src/style.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@layer tailwind-base {
+  @tailwind base;
+  
+  /* WCAG 2.x AA Compliance */
+  /* Ensure minimum contrast ratios and focus indicators */
+  
+  /* Global dark mode styles */
+  html.dark {
+    color-scheme: dark;
+  }
+  
+  body.dark {
+    @apply bg-slate-950 text-slate-50;
+  }
+  
+  /* Professional base styles */
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    @apply bg-white text-slate-900;
+  }
+  
+  /* Synchronized theme transition - all components change together */
+  html,
+  html * {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease !important;
+  }
+
+  /* Smooth scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-100 dark:bg-slate-800;
+    transition: background-color 0.3s ease;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 dark:bg-slate-600 rounded-full;
+    transition: background-color 0.3s ease;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-400 dark:bg-slate-500;
+  }
+  
+  /* Focus styles for keyboard navigation - WCAG AA compliant */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-blue-600 dark:outline-blue-400;
+  }
+  
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    @apply outline-2 outline-offset-2 outline-blue-600 dark:outline-blue-400;
+  }
+  
+  /* Ensure text is resizable */
+  html {
+    font-size: 16px;
+  }
+  
+  /* Minimum touch target size (WCAG 2.1 Level AAA) */
+  button,
+  a,
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  
+  /* High contrast for disabled elements */
+  :disabled {
+    @apply opacity-60 cursor-not-allowed;
+  }
+  
+  /* Ensure sufficient color contrast */
+  a {
+    @apply underline;
+  }
+}
+
+@layer tailwind-utilities {
+  @tailwind components;
+  @tailwind utilities;
+  
+  /* Smooth transitions for theme changes */
+  * {
+    @apply transition-colors duration-200;
+  }
+  
+  /* Professional color utilities with WCAG AA contrast */
+  .text-primary {
+    @apply text-slate-900 dark:text-slate-50;
+  }
+  
+  .text-secondary {
+    @apply text-slate-600 dark:text-slate-400;
+  }
+  
+  .text-tertiary {
+    @apply text-slate-500 dark:text-slate-500;
+  }
+  
+  .bg-primary {
+    @apply bg-white dark:bg-slate-900;
+  }
+  
+  .bg-secondary {
+    @apply bg-slate-50 dark:bg-slate-800;
+  }
+  
+  .border-primary {
+    @apply border-slate-200 dark:border-slate-700;
+  }
+  
+  .border-secondary {
+    @apply border-slate-100 dark:border-slate-800;
+  }
+  
+  /* Card base styles with proper contrast */
+  .card-base {
+    @apply bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm hover:shadow-md transition-all duration-200;
+  }
+  
+  /* Professional button styles with WCAG AA contrast */
+  .btn-primary {
+    @apply px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  .btn-secondary {
+    @apply px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-50 rounded-lg font-medium hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  .btn-ghost {
+    @apply px-4 py-2 text-slate-900 dark:text-slate-50 rounded-lg font-medium hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  /* Input styles with WCAG AA compliance */
+  .input-base {
+    @apply w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-50 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all min-h-[44px];
+  }
+  
+  /* Badge styles */
+  .badge-primary {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300;
+  }
+  
+  .badge-success {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300;
+  }
+  
+  .badge-warning {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300;
+  }
+  
+  .badge-danger {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300;
+  }
+  
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-blue-600 to-emerald-600 dark:from-blue-400 dark:to-emerald-400 bg-clip-text text-transparent;
+  }
+  
+  /* Divider styles */
+  .divider {
+    @apply border-t border-slate-200 dark:border-slate-700;
+  }
+  
+  /* Focus ring */
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  /* Hover effects */
+  .hover-lift {
+    @apply hover:shadow-lg hover:-translate-y-1 transition-all duration-200;
+  }
+  
+  .hover-glow {
+    @apply hover:shadow-lg hover:shadow-blue-500/50 transition-all duration-200;
+  }
+  
+  /* Resizable text - WCAG 2.1 Level AA */
+  .text-resizable {
+    @apply text-base leading-relaxed;
+  }
+  
+  /* Skip link for keyboard navigation */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+  
+  .focus\:not-sr-only:focus {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: inherit;
+    margin: inherit;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+  
+  /* High contrast mode support */
+  @media (prefers-contrast: more) {
+    .text-primary {
+      @apply text-slate-950 dark:text-white;
+    }
+    
+    .text-secondary {
+      @apply text-slate-700 dark:text-slate-300;
+    }
+    
+    .border-primary {
+      @apply border-slate-400 dark:border-slate-600;
+    }
+  }
+  
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      @apply !transition-none !animate-none;
+    }
+  }
+}
+
+@layer primevue {
+  /* PrimeVue injects Aura here */
+  
+  /* Override PrimeVue components for consistency and accessibility */
+  .p-card {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  .p-card .p-card-body {
+    @apply bg-white dark:bg-slate-800;
+  }
+  
+  .p-button {
+    @apply font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  .p-button:not(.p-button-text):not(.p-button-outlined) {
+    @apply shadow-sm hover:shadow-md;
+  }
+  
+  /* Ensure proper contrast for form elements */
+  .p-inputtext {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  /* Ensure proper contrast for dropdowns */
+  .p-dropdown {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900;
+  }
+  
+  /* Dark mode for DataTable */
+  .p-datatable {
+    @apply bg-transparent;
+  }
+
+  .p-datatable .p-datatable-thead > tr > th {
+    @apply bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-50 font-semibold;
+    background-color: #f2f2f2 !important;
+    color: #333333 !important;
+  }
+
+  html.dark .p-datatable .p-datatable-thead > tr > th {
+    background-color: #334155 !important;
+    color: #f1f5f9 !important;
+    border-color: #475569 !important;
+  }
+
+  .p-datatable .p-datatable-tbody > tr {
+    @apply border-b border-slate-200 dark:border-slate-700;
+  }
+
+  .p-datatable .p-datatable-tbody > tr:hover {
+    @apply bg-slate-50 dark:bg-slate-800;
+  }
+
+  html.dark .p-datatable .p-datatable-tbody > tr:hover {
+    background-color: #1e293b !important;
+  }
+
+  .p-datatable .p-datatable-tbody > tr > td {
+    @apply bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50;
+  }
+
+  html.dark .p-datatable .p-datatable-tbody > tr > td {
+    background-color: #0f172a !important;
+    color: #f1f5f9 !important;
+    border-color: #334155 !important;
+  }
+  
+  /* Dark mode for Menu */
+  .p-menu {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  .p-menu .p-menuitem > .p-menuitem-content {
+    @apply text-slate-900 dark:text-slate-50;
+  }
+  
+  .p-menu .p-menuitem > .p-menuitem-content:hover {
+    @apply bg-slate-100 dark:bg-slate-700;
+  }
+  
+  .p-menu .p-menuitem.p-focus > .p-menuitem-content {
+    @apply bg-slate-100 dark:bg-slate-700;
+  }
+  
+  /* Dark mode for Menubar */
+  .p-menubar {
+    @apply bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 !important;
+  }
+
+  .p-menubar .p-menubar-root-list > .p-menuitem > .p-menuitem-content {
+    @apply text-slate-900 dark:text-slate-50 !important;
+  }
+
+  .p-menubar .p-menubar-root-list > .p-menuitem > .p-menuitem-content:hover {
+    @apply bg-slate-100 dark:bg-slate-800 !important;
+  }
+
+  html.dark .p-menubar {
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
+  }
+
+  html.dark .p-menubar .p-menubar-root-list > .p-menuitem > .p-menuitem-content {
+    color: #f1f5f9 !important;
+  }
+
+  html.dark .p-menubar .p-menubar-root-list > .p-menuitem > .p-menuitem-content:hover {
+    background-color: #1e293b !important;
+  }
+  
+  /* Dark mode for Drawer */
+  .p-drawer {
+    @apply bg-white dark:bg-slate-900;
+  }
+  
+  .p-drawer .p-drawer-header {
+    @apply bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  /* Dark mode for Chart */
+  .p-chart canvas {
+    filter: brightness(1);
+  }
+  
+  html.dark .p-chart canvas {
+    filter: brightness(0.95);
+  }
+  
+  /* Dark mode for Accordion */
+  .p-accordion .p-accordion-header-link {
+    @apply text-slate-900 dark:text-slate-50 bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  .p-accordion .p-accordion-header-link:hover {
+    @apply bg-slate-50 dark:bg-slate-700;
+  }
+  
+  .p-accordion .p-accordion-content {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-50;
+  }
+  
+  /* Dark mode for TabView */
+  .p-tabview .p-tabview-nav {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  .p-tabview .p-tabview-nav .p-tabview-nav-link {
+    @apply text-slate-900 dark:text-slate-50;
+  }
+  
+  .p-tabview .p-tabview-nav .p-tabview-nav-link:hover {
+    @apply bg-slate-50 dark:bg-slate-700;
+  }
+  
+  .p-tabview .p-tabview-panels {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  /* Dark mode for Message */
+  .p-message {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  .p-message.p-message-info {
+    @apply bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800;
+  }
+  
+  .p-message.p-message-success {
+    @apply bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800;
+  }
+  
+  .p-message.p-message-warning {
+    @apply bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800;
+  }
+  
+  .p-message.p-message-error {
+    @apply bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800;
+  }
+  
+  /* Dark mode for ProgressBar */
+  .p-progressbar {
+    @apply bg-slate-200 dark:bg-slate-700;
+  }
+  
+  /* Dark mode for Rating */
+  .p-rating .p-icon {
+    @apply text-slate-400 dark:text-slate-600;
+  }
+  
+  .p-rating .p-icon.p-rating-item-active {
+    @apply text-yellow-400 dark:text-yellow-300;
+  }
+  
+  /* Dark mode for Timeline */
+  .p-timeline {
+    @apply text-slate-900 dark:text-slate-50;
+  }
+  
+  .p-timeline .p-timeline-event-content {
+    @apply bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700;
+  }
+  
+  /* Dark mode for Divider */
+  .p-divider {
+    @apply border-slate-200 dark:border-slate-700;
+  }
+
+  html.dark .p-divider {
+    border-color: #334155 !important;
+  }
+  
+  /* Dark mode for Tag */
+  .p-tag {
+    @apply bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300;
+  }
+  
+  .p-tag.p-tag-success {
+    @apply bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300;
+  }
+  
+  .p-tag.p-tag-warning {
+    @apply bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300;
+  }
+  
+  .p-tag.p-tag-danger {
+    @apply bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300;
+  }
+}
+
+/* Global styles */
+html, body, #app {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  @apply transition-colors duration-200;
+}
+
+/* Ensure smooth transitions on theme change */
+html, body, * {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Selection color with proper contrast */
+::selection {
+  @apply bg-blue-600 dark:bg-blue-500 text-white;
+}
+
+/* Link styles with proper contrast and underlines */
+a {
+  @apply text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors underline;
+}
+
+/* Code block styles */
+code {
+  @apply bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-50 px-2 py-1 rounded font-mono text-sm;
+}
+
+pre {
+  @apply bg-slate-900 dark:bg-slate-950 text-slate-50 p-4 rounded-lg overflow-x-auto;
+}
+
+pre code {
+  @apply bg-transparent text-slate-50 px-0 py-0;
+}
+
+/* Table styles with proper contrast */
+table {
+  @apply w-full border-collapse;
+}
+
+th {
+  @apply bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-50 font-semibold text-left px-4 py-2 border-b border-slate-200 dark:border-slate-700;
+}
+
+td {
+  @apply px-4 py-2 border-b border-slate-200 dark:border-slate-700;
+}
+
+tr:hover {
+  @apply bg-slate-50 dark:bg-slate-800;
+}
+
+/* Animation utilities */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-in-out;
+}
+
+/* Ensure proper spacing for all interactive elements */
+button,
+a,
+input,
+select,
+textarea {
+  @apply focus:outline-none;
+}
+
+/* Ensure labels are properly associated with form fields */
+label {
+  @apply block font-medium text-primary;
+}
+
+/* Ensure form fields have proper spacing */
+input,
+select,
+textarea {
+  @apply block w-full;
+}
+
+/* Chart grid and text dark mode fix */
+.p-chart {
+  filter: brightness(1);
+}
+
+html.dark .p-chart {
+  filter: brightness(0.95) contrast(1.05);
+}
+
+/* Specific chart text color fix */
+.p-chart canvas {
+  mix-blend-mode: normal;
+}
+
+/* PrimeVue chart text color in dark mode */
+html.dark .apexcharts-text {
+  fill: #f1f5f9 !important;
+}
+
+html.dark .apexcharts-legend-text {
+  color: #f1f5f9 !important;
+}
+
+html.dark .apexcharts-xaxis-label text,
+html.dark .apexcharts-yaxis-label text {
+  fill: #f1f5f9 !important;
+}
+
+/* Grid lines in dark mode */
+html.dark .apexcharts-gridline {
+  stroke: #334155 !important;
+}
+
+html.dark .apexcharts-tooltip {
+  background: #1e293b !important;
+  color: #f1f5f9 !important;
+}
+
+
+/* AGGRESSIVE CHART TEXT CONTRAST FIXES FOR DARK MODE */
+/* Chart.js text rendering - force bright white text */
+html.dark canvas {
+  filter: brightness(1.2) contrast(1.3) !important;
+}
+
+/* Force white text on all chart elements */
+html.dark .chartjs-render-monitor {
+  filter: brightness(1.25) contrast(1.35) !important;
+}
+
+/* Chart legend and labels - pure white */
+html.dark .p-chart text,
+html.dark .p-chart tspan {
+  fill: #ffffff !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  opacity: 1 !important;
+}
+
+/* Chart axis labels - bright white */
+html.dark .p-chart .chart-label,
+html.dark .p-chart .chart-title {
+  fill: #ffffff !important;
+  color: #ffffff !important;
+}
+
+/* Ensure canvas text is visible */
+html.dark .p-chart {
+  filter: brightness(1.25) contrast(1.3) !important;
+}
+
+/* Force bright text on PrimeVue charts */
+html.dark .p-chart svg text {
+  fill: #ffffff !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+/* Grid lines brighter */
+html.dark .p-chart .grid-line {
+  stroke: #475569 !important;
+  opacity: 0.5 !important;
+}
+
+/* Tooltip text bright */
+html.dark .p-chart .tooltip-text {
+  fill: #ffffff !important;
+  color: #ffffff !important;
+}
+
+/* Legend bright white */
+html.dark .p-chart .legend-label,
+html.dark .p-chart .legend-text {
+  fill: #ffffff !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}

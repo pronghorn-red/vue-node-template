@@ -1,0 +1,24 @@
+# Project Pronghorn - robots.txt
+# Allow all crawlers to index the site
+
+User-agent: *
+Allow: /
+
+# Specific rules for common crawlers
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+# Disallow crawling of admin and private areas (if any)
+Disallow: /admin/
+Disallow: /private/
+Disallow: /.git/
+Disallow: /node_modules/
+
+# Sitemap location
+Sitemap: https://pronghorn.example.com/sitemap.xml
+
+# Crawl delay (in seconds) - be respectful
+Crawl-delay: 1
