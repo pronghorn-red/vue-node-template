@@ -1,530 +1,457 @@
 /**
- * @fileoverview WebSocket Handler for LLM Interactions
- * @description Handles WebSocket connections for real-time LLM streaming
- * with support for all providers. Uses llmService for the actual streaming logic.
- *
- * Event types sent to client:
- * - connected: Initial connection with available providers
- * - chat_start: Chat request acknowledged
- * - chat_chunk: Content chunk received
- * - chat_thinking: Thinking content (for models that support it)
- * - chat_done: Chat completed with full content
- * - chat_error: Error occurred
- * - chat_cancelled: Request was cancelled
- *
+ * @fileoverview LLM WebSocket Handler
+ * @description Handles LLM-specific WebSocket messages (llm:* domain).
+ * Delegates streaming to llmService and manages per-connection task state.
+ * 
+ * Message Types:
+ * - llm:start     - Start streaming LLM request
+ * - llm:cancel    - Cancel specific task
+ * - llm:cancel_all - Cancel all active tasks
+ * - llm:providers - Get available providers
+ * - llm:models    - Get available models
+ * 
  * @module websocket/llmHandler
  */
 
-const WebSocket = require('ws');
-const crypto = require('crypto');
 const llmService = require('../services/llmService');
 const logger = require('../utils/logger');
+const { sendMessage, generateTaskId } = require('./socketController');
 
-/**
- * Active connections map
- * @type {Map<string, Object>}
- */
-const connections = new Map();
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
 
-/**
- * Generate a unique ID
- * @returns {string} Unique identifier
- */
-const generateId = () => {
-  return `${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+const CONFIG = {
+  defaultModel: process.env.DEFAULT_LLM_MODEL || 'gemini-2.0-flash',
+  defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'google',
+  taskTimeout: parseInt(process.env.LLM_TASK_TIMEOUT) || 5 * 60 * 1000, // 5 minutes
+  maxConcurrentTasks: parseInt(process.env.LLM_MAX_CONCURRENT_TASKS) || 10,
 };
 
-/**
- * Verify JWT token (optional - allows anonymous connections if JWT_SECRET not set)
- * @param {string} token - JWT token
- * @returns {Object|null} Decoded token or null
- */
-const verifyToken = (token) => {
-  if (!token) return null;
-
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    logger.debug('JWT_SECRET not configured, allowing anonymous WebSocket connections');
-    return { anonymous: true };
-  }
-
-  try {
-    const jwt = require('jsonwebtoken');
-    return jwt.verify(token, secret);
-  } catch (error) {
-    logger.debug('WebSocket token verification failed', { error: error.message });
-    return null;
-  }
-};
+// ============================================================================
+// MESSAGE HANDLERS
+// ============================================================================
 
 /**
- * Send a JSON message to a WebSocket client
- * @param {WebSocket} ws - WebSocket connection
- * @param {Object} message - Message object to send
+ * Handle incoming LLM domain message
+ * @param {Object} connection - Connection state from socketController
+ * @param {Object} message - Parsed message
+ * @param {string} action - Action part of message type (e.g., 'start', 'cancel')
  */
-const sendMessage = (ws, message) => {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(
-      JSON.stringify({
-        ...message,
-        timestamp: new Date().toISOString(),
-      })
-    );
-  }
-};
-
-/**
- * Initialize WebSocket server
- * @param {Object} server - HTTP server instance
- * @returns {WebSocket.Server} WebSocket server instance
- */
-const initializeWebSocket = (server) => {
-  const wss = new WebSocket.Server({
-    server,
-    path: '/ws',
-    verifyClient: ({ req }, callback) => {
-      const url = new URL(req.url, `http://${req.headers.host}`);
-      const token = url.searchParams.get('token');
-      req.user = token ? verifyToken(token) : { anonymous: true };
-      callback(true);
-    },
-  });
-
-  wss.on('connection', (ws, req) => {
-    const connectionId = generateId();
-    const user = req.user;
-
-    // Store connection
-    connections.set(connectionId, {
-      ws,
-      user,
-      connectedAt: new Date(),
-      conversations: new Map(),
-      currentRequest: null,
-    });
-
-    ws.connectionId = connectionId;
-
-    logger.info('WebSocket client connected', {
-      connectionId,
-      userId: user?.id || 'anonymous',
-      ip: req.socket.remoteAddress,
-    });
-
-    // Send welcome message
-    sendMessage(ws, {
-      type: 'connected',
-      connectionId,
-      authenticated: !!user && !user.anonymous,
-      availableProviders: llmService.getAvailableProviders(),
-      providerStatus: llmService.getProviderStatus(),
-    });
-
-    // Handle incoming messages
-    ws.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        await handleMessage(connectionId, message);
-      } catch (error) {
-        logger.error('WebSocket message error', { connectionId, error: error.message });
-        sendMessage(ws, {
-          type: 'error',
-          error: 'Invalid message format',
-          details: error.message,
-        });
-      }
-    });
-
-    // Handle connection close
-    ws.on('close', (code, reason) => {
-      connections.delete(connectionId);
-      logger.info('WebSocket client disconnected', {
-        connectionId,
-        userId: user?.id || 'anonymous',
-        code,
-        reason: reason?.toString() || 'No reason',
-      });
-    });
-
-    // Handle errors
-    ws.on('error', (error) => {
-      logger.error('WebSocket error', { connectionId, error: error.message });
-    });
-
-    // Heartbeat
-    ws.isAlive = true;
-    ws.on('pong', () => {
-      ws.isAlive = true;
-    });
-  });
-
-  // Heartbeat interval
-  const heartbeatInterval = setInterval(() => {
-    wss.clients.forEach((ws) => {
-      if (!ws.isAlive) {
-        logger.debug('Terminating inactive WebSocket', { connectionId: ws.connectionId });
-        connections.delete(ws.connectionId);
-        return ws.terminate();
-      }
-      ws.isAlive = false;
-      ws.ping();
-    });
-  }, 30000);
-
-  wss.on('close', () => {
-    clearInterval(heartbeatInterval);
-  });
-
-  logger.info('✅ WebSocket server initialized on /ws');
-  return wss;
-};
-
-/**
- * Handle incoming WebSocket message
- * @param {string} connectionId - Connection identifier
- * @param {Object} message - Parsed message object
- */
-const handleMessage = async (connectionId, message) => {
-  const connection = connections.get(connectionId);
-  if (!connection) return;
-
-  const { ws } = connection;
-
-  switch (message.type) {
-    case 'chat':
-      await handleChatMessage(connectionId, message);
+const handleMessage = async (connection, message, action) => {
+  switch (action) {
+    case 'start':
+      await handleStart(connection, message);
       break;
-
+      
     case 'cancel':
-      handleCancelRequest(connectionId, message);
+      handleCancel(connection, message);
       break;
-
-    case 'ping':
-      sendMessage(ws, { type: 'pong' });
+      
+    case 'cancel_all':
+      handleCancelAll(connection);
       break;
-
-    case 'get_providers':
-      sendMessage(ws, {
-        type: 'providers',
-        providers: llmService.getProviderStatus(),
-        available: llmService.getAvailableProviders(),
-        default: process.env.DEFAULT_LLM_PROVIDER || 'google',
-      });
+      
+    case 'providers':
+      handleGetProviders(connection, message);
       break;
-
-    case 'get_models':
-      const models = llmService.getAvailableModels(message.provider || null);
-      sendMessage(ws, {
-        type: 'models',
-        requestId: message.requestId,
-        models,
-        count: models.length,
-      });
+      
+    case 'models':
+      handleGetModels(connection, message);
       break;
-
-    case 'get_model_config':
-      const config = llmService.getModelConfig(message.modelId);
-      sendMessage(ws, {
-        type: 'model_config',
-        requestId: message.requestId,
-        config,
-        found: !!config,
-      });
-      break;
-
+      
     default:
-      sendMessage(ws, {
-        type: 'error',
-        error: `Unknown message type: ${message.type}`,
-        supportedTypes: ['chat', 'cancel', 'ping', 'get_providers', 'get_models', 'get_model_config'],
+      sendMessage(connection.ws, {
+        type: 'llm:error',
+        taskId: message.taskId,
+        code: 'UNKNOWN_ACTION',
+        error: `Unknown LLM action: ${action}`,
+        supportedActions: ['start', 'cancel', 'cancel_all', 'providers', 'models'],
       });
   }
 };
 
 /**
- * Handle chat message with streaming response
- * Uses llmService.streamChat with callback pattern
- *
- * @param {string} connectionId - Connection identifier
- * @param {Object} message - Chat message object
+ * Handle llm:start - Start streaming LLM request
+ * @param {Object} connection - Connection state
+ * @param {Object} message - Start message
  */
-const handleChatMessage = async (connectionId, message) => {
-  const connection = connections.get(connectionId);
-  if (!connection) return;
-
-  const { ws, user } = connection;
-  const requestId = message.requestId || message.id || generateId();
-  const conversationId = message.conversationId || generateId();
-
-  // Extract options
+const handleStart = async (connection, message) => {
+  const { ws, activeTasks, connectionId, user } = connection;
+  
+  // Generate or use provided task ID
+  const taskId = message.taskId || generateTaskId();
+  
+  // Check concurrent task limit
+  if (activeTasks.size >= CONFIG.maxConcurrentTasks) {
+    sendMessage(ws, {
+      type: 'llm:error',
+      taskId,
+      code: 'TOO_MANY_TASKS',
+      error: `Maximum concurrent tasks (${CONFIG.maxConcurrentTasks}) exceeded`,
+      retryable: true,
+    });
+    return;
+  }
+  
+  // Extract parameters
   const {
-    content,
-    messages: inputMessages,
+    model = CONFIG.defaultModel,
     provider,
-    model,
+    messages,
+    content,
     systemPrompt,
     temperature,
     maxTokens,
   } = message;
-
+  
   // Validate input
-  if (!content && !inputMessages) {
+  if (!messages && !content) {
     sendMessage(ws, {
-      type: 'chat_error',
-      requestId,
-      error: 'Either "content" or "messages" is required',
+      type: 'llm:error',
+      taskId,
+      code: 'INVALID_INPUT',
+      error: 'Either "messages" or "content" is required',
     });
     return;
   }
-
-  // Determine model and provider
-  const actualModel = model || process.env.DEFAULT_LLM_MODEL || 'gemini-2.0-flash';
-  const modelConfig = llmService.getModelConfig(actualModel);
-  const actualProvider = provider || modelConfig?.provider;
-
+  
+  // Build messages array
+  let messagesToSend;
+  if (messages) {
+    messagesToSend = messages;
+  } else {
+    messagesToSend = [{ role: 'user', content }];
+  }
+  
+  // Get model configuration
+  const modelConfig = llmService.getModelConfig(model);
+  const actualProvider = provider || modelConfig?.provider || CONFIG.defaultProvider;
+  
   // Check if provider is configured
   const providerStatus = llmService.getProviderStatus();
-  if (actualProvider && !providerStatus[actualProvider]?.configured) {
+  if (!providerStatus[actualProvider]?.configured) {
     sendMessage(ws, {
-      type: 'chat_error',
-      requestId,
-      error: `Provider '${actualProvider}' is not configured. Please set the API key in .env`,
+      type: 'llm:error',
+      taskId,
+      code: 'PROVIDER_NOT_CONFIGURED',
+      error: `Provider '${actualProvider}' is not configured`,
       availableProviders: llmService.getAvailableProviders(),
     });
     return;
   }
-
-  // Get or create conversation history
-  let conversation = connection.conversations.get(conversationId);
-  if (!conversation) {
-    conversation = { messages: [], createdAt: new Date() };
-    connection.conversations.set(conversationId, conversation);
-  }
-
-  // Build messages array
-  let messagesToSend;
-  if (inputMessages) {
-    messagesToSend = inputMessages;
-  } else {
-    conversation.messages.push({ role: 'user', content });
-    messagesToSend = conversation.messages.slice(-20);
-  }
-
-  logger.info('WebSocket chat request', {
-    connectionId,
-    requestId,
+  
+  // Create abort controller for this task
+  const abortController = new AbortController();
+  
+  // Register task
+  activeTasks.set(taskId, {
+    abortController,
+    startedAt: Date.now(),
+    model,
     provider: actualProvider,
-    model: actualModel,
+  });
+  
+  logger.info('LLM task started', {
+    connectionId,
+    taskId,
+    model,
+    provider: actualProvider,
     messageCount: messagesToSend.length,
     userId: user?.id || 'anonymous',
   });
-
-  // Send start acknowledgment
+  
+  // Send acknowledgment
   sendMessage(ws, {
-    type: 'chat_start',
-    requestId,
-    conversationId,
+    type: 'llm:started',
+    taskId,
+    model,
     provider: actualProvider,
-    model: actualModel,
-    modelConfig: modelConfig
-      ? {
-          name: modelConfig.name,
-          maxTokens: modelConfig.maxTokens,
-          thinkingEnabled: modelConfig.thinkingEnabled,
-        }
-      : null,
+    modelConfig: modelConfig ? {
+      name: modelConfig.name,
+      maxTokens: modelConfig.maxTokens,
+      thinkingEnabled: modelConfig.thinkingEnabled,
+    } : null,
   });
-
+  
+  // Set timeout
+  const timeoutId = setTimeout(() => {
+    if (activeTasks.has(taskId)) {
+      const task = activeTasks.get(taskId);
+      task.abortController.abort();
+      activeTasks.delete(taskId);
+      
+      sendMessage(ws, {
+        type: 'llm:error',
+        taskId,
+        code: 'TIMEOUT',
+        error: 'Request timed out',
+        retryable: true,
+      });
+      
+      logger.warn('LLM task timed out', { connectionId, taskId });
+    }
+  }, CONFIG.taskTimeout);
+  
   try {
-    let fullContent = '';
     let chunkCount = 0;
-    let aborted = false;
-
-    // Store abort flag for potential cancellation
-    connection.currentRequest = {
-      requestId,
-      abort: () => {
-        aborted = true;
-      },
-    };
-
-    // Set timeout
-    const timeoutId = setTimeout(() => {
-      if (!aborted) {
-        aborted = true;
-        sendMessage(ws, {
-          type: 'chat_error',
-          requestId,
-          conversationId,
-          error: 'Request timeout - no response after 5 minutes',
-        });
-      }
-    }, 5 * 60 * 1000);
-
-    // Stream using the service with callback
+    let fullContent = '';
+    
     await llmService.streamChat({
       provider: actualProvider,
-      model: actualModel,
+      model,
       messages: messagesToSend,
       systemPrompt,
       temperature,
       maxTokens,
       onChunk: (chunk) => {
-        // Check if connection is still open
-        if (ws.readyState !== WebSocket.OPEN || aborted) {
+        // Check if aborted
+        if (abortController.signal.aborted) {
           return;
         }
-
-        if (chunk.type === 'content' && chunk.content) {
-          fullContent += chunk.content;
-          chunkCount++;
-
-          sendMessage(ws, {
-            type: 'chat_chunk',
-            requestId,
-            conversationId,
-            content: chunk.content,
-            chunkIndex: chunkCount,
-          });
-        } else if (chunk.type === 'thinking' && chunk.content) {
-          sendMessage(ws, {
-            type: 'chat_thinking',
-            requestId,
-            conversationId,
-            content: chunk.content,
-          });
-        } else if (chunk.type === 'done') {
-          clearTimeout(timeoutId);
-
-          // Add assistant response to conversation history
-          if (!inputMessages) {
-            conversation.messages.push({
-              role: 'assistant',
-              content: fullContent,
+        
+        // Check if connection still open
+        if (ws.readyState !== 1) { // WebSocket.OPEN
+          return;
+        }
+        
+        switch (chunk.type) {
+          case 'content':
+            if (chunk.content) {
+              fullContent += chunk.content;
+              chunkCount++;
+              
+              sendMessage(ws, {
+                type: 'llm:chunk',
+                taskId,
+                content: chunk.content,
+                chunkIndex: chunkCount,
+              });
+            }
+            break;
+            
+          case 'thinking':
+            if (chunk.content) {
+              sendMessage(ws, {
+                type: 'llm:thinking',
+                taskId,
+                content: chunk.content,
+              });
+            }
+            break;
+            
+          case 'done':
+            clearTimeout(timeoutId);
+            activeTasks.delete(taskId);
+            
+            sendMessage(ws, {
+              type: 'llm:done',
+              taskId,
+              finishReason: chunk.finishReason || 'stop',
+              chunkCount,
+              totalLength: fullContent.length,
             });
-          }
-
-          sendMessage(ws, {
-            type: 'chat_done',
-            requestId,
-            conversationId,
-            fullContent,
-            content: fullContent,
-            chunkCount,
-            finishReason: chunk.finishReason,
-            model: actualModel,
-          });
-
-          logger.info('WebSocket chat completed', {
-            connectionId,
-            requestId,
-            chunkCount,
-            contentLength: fullContent.length,
-            finishReason: chunk.finishReason,
-          });
+            
+            logger.info('LLM task completed', {
+              connectionId,
+              taskId,
+              chunkCount,
+              contentLength: fullContent.length,
+              finishReason: chunk.finishReason,
+              duration: Date.now() - activeTasks.get(taskId)?.startedAt,
+            });
+            break;
         }
       },
     });
-
+    
+    // Clear timeout if not already done
     clearTimeout(timeoutId);
-
-    // Handle cancellation
-    if (aborted && ws.readyState === WebSocket.OPEN) {
+    
+    // Handle cancellation during streaming
+    if (abortController.signal.aborted) {
       sendMessage(ws, {
-        type: 'chat_cancelled',
-        requestId,
-        conversationId,
+        type: 'llm:cancelled',
+        taskId,
         partialContent: fullContent,
+        chunkCount,
       });
     }
+    
   } catch (error) {
-    logger.error('WebSocket chat error', {
+    clearTimeout(timeoutId);
+    activeTasks.delete(taskId);
+    
+    // Don't send error if aborted
+    if (abortController.signal.aborted) {
+      return;
+    }
+    
+    logger.error('LLM task error', {
       connectionId,
-      requestId,
+      taskId,
       error: error.message,
-      stack: error.stack,
       provider: actualProvider,
-      model: actualModel,
+      model,
     });
-
+    
     sendMessage(ws, {
-      type: 'chat_error',
-      requestId,
-      conversationId,
+      type: 'llm:error',
+      taskId,
+      code: 'STREAM_ERROR',
       error: error.message,
-      code: error.code || 'STREAM_ERROR',
       provider: actualProvider,
-      model: actualModel,
+      model,
+      retryable: true,
     });
   } finally {
-    connection.currentRequest = null;
+    // Ensure task is cleaned up
+    if (activeTasks.has(taskId)) {
+      activeTasks.delete(taskId);
+    }
   }
 };
 
 /**
- * Handle request cancellation
- * @param {string} connectionId - Connection identifier
- * @param {Object} message - Cancel message object
+ * Handle llm:cancel - Cancel specific task
+ * @param {Object} connection - Connection state
+ * @param {Object} message - Cancel message
  */
-const handleCancelRequest = (connectionId, message) => {
-  const connection = connections.get(connectionId);
-  if (!connection || !connection.currentRequest) {
+const handleCancel = (connection, message) => {
+  const { ws, activeTasks, connectionId } = connection;
+  const { taskId } = message;
+  
+  if (!taskId) {
+    sendMessage(ws, {
+      type: 'llm:error',
+      code: 'MISSING_TASK_ID',
+      error: 'taskId is required for cancellation',
+    });
     return;
   }
-
-  const { ws } = connection;
-  const { requestId, abort } = connection.currentRequest;
-
-  if (message.requestId === requestId || !message.requestId) {
-    abort();
-
+  
+  const task = activeTasks.get(taskId);
+  if (!task) {
     sendMessage(ws, {
-      type: 'cancel_acknowledged',
-      requestId,
+      type: 'llm:error',
+      taskId,
+      code: 'TASK_NOT_FOUND',
+      error: `Task ${taskId} not found or already completed`,
     });
-
-    logger.info('Chat request cancelled', { connectionId, requestId });
+    return;
   }
-};
-
-/**
- * Broadcast message to all connected clients
- * @param {Object} message - Message to broadcast
- * @param {Function} [filter] - Optional filter function
- */
-const broadcast = (message, filter = null) => {
-  connections.forEach((connection, connectionId) => {
-    if (filter && !filter(connection, connectionId)) return;
-    sendMessage(connection.ws, message);
+  
+  // Abort the task
+  task.abortController.abort();
+  activeTasks.delete(taskId);
+  
+  logger.info('LLM task cancelled', { connectionId, taskId });
+  
+  sendMessage(ws, {
+    type: 'llm:cancelled',
+    taskId,
   });
 };
 
 /**
- * Get connection statistics
- * @returns {Object} Connection statistics
+ * Handle llm:cancel_all - Cancel all active tasks
+ * @param {Object} connection - Connection state
  */
-const getStats = () => ({
-  totalConnections: connections.size,
-  connections: Array.from(connections.entries()).map(([id, conn]) => ({
-    id,
-    userId: conn.user?.id || 'anonymous',
-    authenticated: !!conn.user && !conn.user.anonymous,
-    connectedAt: conn.connectedAt,
-    conversationCount: conn.conversations.size,
-    hasActiveRequest: !!conn.currentRequest,
-  })),
-});
+const handleCancelAll = (connection) => {
+  const { ws, activeTasks, connectionId } = connection;
+  
+  const cancelledTasks = [];
+  
+  activeTasks.forEach((task, taskId) => {
+    task.abortController.abort();
+    cancelledTasks.push(taskId);
+  });
+  
+  activeTasks.clear();
+  
+  logger.info('All LLM tasks cancelled', {
+    connectionId,
+    count: cancelledTasks.length,
+  });
+  
+  sendMessage(ws, {
+    type: 'llm:cancelled_all',
+    taskIds: cancelledTasks,
+    count: cancelledTasks.length,
+  });
+};
 
 /**
- * Get active connection count
- * @returns {number} Number of active connections
+ * Handle llm:providers - Get available providers
+ * @param {Object} connection - Connection state
+ * @param {Object} message - Request message
  */
-const getConnectionCount = () => connections.size;
+const handleGetProviders = (connection, message) => {
+  const { ws } = connection;
+  
+  sendMessage(ws, {
+    type: 'llm:providers',
+    taskId: message.taskId,
+    providers: llmService.getProviderStatus(),
+    available: llmService.getAvailableProviders(),
+    default: CONFIG.defaultProvider,
+  });
+};
+
+/**
+ * Handle llm:models - Get available models
+ * @param {Object} connection - Connection state
+ * @param {Object} message - Request message
+ */
+const handleGetModels = (connection, message) => {
+  const { ws } = connection;
+  const { provider } = message;
+  
+  const models = llmService.getAvailableModels(provider || null);
+  
+  sendMessage(ws, {
+    type: 'llm:models',
+    taskId: message.taskId,
+    provider: provider || 'all',
+    models,
+    count: models.length,
+    default: CONFIG.defaultModel,
+  });
+};
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * Get available providers (for socketController welcome message)
+ * @returns {Array<string>}
+ */
+const getProviders = () => {
+  return llmService.getAvailableProviders();
+};
+
+/**
+ * Get handler statistics
+ * @returns {Object}
+ */
+const getStats = () => {
+  return {
+    defaultModel: CONFIG.defaultModel,
+    defaultProvider: CONFIG.defaultProvider,
+    providers: llmService.getProviderStatus(),
+    availableProviders: llmService.getAvailableProviders(),
+    modelCount: llmService.getAvailableModels().length,
+  };
+};
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
 
 module.exports = {
-  initializeWebSocket,
-  broadcast,
+  handleMessage,
+  getProviders,
   getStats,
-  getConnectionCount,
-  sendMessage,
+  CONFIG,
 };

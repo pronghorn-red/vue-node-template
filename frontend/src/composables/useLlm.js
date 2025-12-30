@@ -1,34 +1,56 @@
 /**
  * @fileoverview useLlm Composable
- * @description Composable for managing LLM models, providers, and chat interactions
- * with support for both WebSocket and SSE streaming methods.
- * Supports full conversation history and system prompts.
+ * @description LLM-specific composable for managing models, providers, and chat interactions.
+ * Uses useWebSocket for WebSocket transport and supports SSE fallback.
  * 
- * IMPORTANT: Install @microsoft/fetch-event-source for SSE support:
- * npm install @microsoft/fetch-event-source
+ * Handles all llm:* domain messages and provides a clean API for:
+ * - Single chat requests
+ * - Parallel/batch requests
+ * - Model and provider management
  */
 
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import api from '@/services/api'
 import { useWebSocket } from '@/composables/useWebSocket'
 
-// Shared state (singleton pattern for state persistence across components)
+// ============================================================================
+// SHARED STATE (Singleton)
+// ============================================================================
+
 const models = ref([])
 const providers = ref({})
 const availableProviders = ref([])
 const selectedModel = ref(null)
-const streamMethod = ref(localStorage.getItem('llmStreamMethod') || 'sse') // 'sse' or 'ws'
+const streamMethod = ref(localStorage.getItem('llmStreamMethod') || 'ws') // Default to WebSocket
 const loading = ref(false)
 const error = ref(null)
 const isInitialized = ref(false)
 
+// ============================================================================
+// COMPOSABLE
+// ============================================================================
+
 export const useLlm = () => {
   // WebSocket integration
-  const { isConnected, sendMessage, addChatListener } = useWebSocket()
+  const {
+    isConnected,
+    sendMessage,
+    createTask,
+    cancelTask,
+    cancelAllTasks,
+    waitForTask,
+    tasks,
+    addDomainListener,
+    generateTaskId,
+  } = useWebSocket()
+
+  // ============================================================================
+  // MODEL & PROVIDER MANAGEMENT
+  // ============================================================================
 
   /**
-   * Fetch all available models
+   * Fetch all available models from API
    */
   const fetchModels = async () => {
     loading.value = true
@@ -51,7 +73,7 @@ export const useLlm = () => {
   }
 
   /**
-   * Fetch provider status
+   * Fetch provider status from API
    */
   const fetchProviders = async () => {
     try {
@@ -66,306 +88,15 @@ export const useLlm = () => {
   /**
    * Get models for a specific provider
    * @param {string} provider - Provider name
-   * @returns {Array} Models for the provider
+   * @returns {Array}
    */
   const getModelsByProvider = (provider) => {
     return models.value.filter(m => m.provider === provider)
   }
 
   /**
-   * Stream chat via SSE (Server-Sent Events) using @microsoft/fetch-event-source
-   * This properly handles POST requests with SSE responses
-   * @param {Array} messages - Array of message objects with role and content
-   * @param {string|null} systemPrompt - Optional system prompt
-   * @param {number|null} temperature - Optional temperature
-   * @param {Function|null} onChunk - Callback for streaming chunks
-   * @returns {Promise<Object>} Chat response
-   */
-  const streamChatSSE = async (messages, systemPrompt = null, temperature = null, onChunk = null) => {
-    const requestBody = {
-      messages,
-      model: selectedModel.value?.id || 'gpt-4.1',
-      ...(systemPrompt && { systemPrompt }),
-      ...(temperature !== null && { temperature })
-    }
-
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-    const chunks = []
-    let fullContent = ''
-    let finishReason = 'stop'
-
-    return new Promise((resolve, reject) => {
-      const ctrl = new AbortController()
-      
-      fetchEventSource(`${baseUrl}/llm/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-        signal: ctrl.signal,
-        openWhenHidden: true, 
-        
-        onopen: async (response) => {
-          if (response.ok) {
-            console.debug('SSE connection opened')
-            return
-          }
-          
-          // Try to get error message from response
-          let errorMessage = `HTTP ${response.status}`
-          try {
-            const errorData = await response.json()
-            errorMessage = errorData.message || errorData.error || errorMessage
-          } catch (e) {
-            // Ignore parse errors
-          }
-          
-          throw new Error(errorMessage)
-        },
-        
-        onmessage: (event) => {
-          // event.event is the event type (connected, start, content, done, end, error)
-          // event.data is the JSON string
-          
-          if (!event.data) return
-          
-          try {
-            const data = JSON.parse(event.data)
-            
-            switch (event.event) {
-              case 'error':
-                ctrl.abort()
-                reject(new Error(data.error || 'Stream error'))
-                break
-                
-              case 'content':
-                if (data.content) {
-                  chunks.push(data.content)
-                  fullContent += data.content
-                  if (onChunk) {
-                    onChunk(data.content)
-                  }
-                }
-                break
-                
-              case 'thinking':
-                // Handle thinking content for models that support it
-                console.debug('Thinking:', data.content)
-                break
-                
-              case 'done':
-                finishReason = data.finishReason || 'stop'
-                // Don't resolve yet - wait for 'end' event
-                break
-                
-              case 'end':
-                ctrl.abort() // Clean close
-                resolve({
-                  content: fullContent,
-                  finishReason
-                })
-                break
-                
-              case 'start':
-              case 'connected':
-                console.debug(`SSE ${event.event}:`, data)
-                break
-                
-              default:
-                console.debug(`Unknown SSE event: ${event.event}`, data)
-            }
-          } catch (parseErr) {
-            console.warn('SSE parse error:', parseErr.message, 'Data:', event.data)
-          }
-        },
-        
-        onclose: () => {
-          // Stream closed - resolve with what we have if not already resolved
-          if (chunks.length > 0) {
-            resolve({
-              content: fullContent,
-              finishReason
-            })
-          }
-        },
-        
-        onerror: (err) => {
-          // Don't retry on errors - just reject
-          ctrl.abort()
-          reject(err)
-          throw err // This prevents retry
-        }
-      }).catch(reject)
-    })
-  }
-
-  /**
-   * Stream chat via WebSocket
-   * @param {Array} messages - Array of message objects with role and content
-   * @param {string|null} systemPrompt - Optional system prompt
-   * @param {number|null} temperature - Optional temperature
-   * @param {Function|null} onChunk - Callback for streaming chunks
-   * @returns {Promise<Object>} Chat response
-   */
-  const streamChatWebSocket = async (messages, systemPrompt = null, temperature = null, onChunk = null) => {
-    if (!isConnected.value) {
-      throw new Error('WebSocket not connected. Please wait for connection or use SSE method.')
-    }
-
-    const requestId = `chat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    const chunks = []
-    let fullContent = ''
-
-    return new Promise((resolve, reject) => {
-      // Set timeout
-      const timeoutId = setTimeout(() => {
-        cleanup()
-        reject(new Error('WebSocket timeout - no response received after 5 minutes'))
-      }, 5 * 60 * 1000) // 5 minutes
-      
-      // Add listener for this specific request
-      const cleanup = addChatListener(requestId, (data) => {
-        console.debug('WS received:', data.type, data)
-        
-        switch (data.type) {
-          case 'chat_start':
-            console.debug('Chat started:', data.model, data.provider)
-            break
-            
-          case 'chat_chunk':
-            if (data.content) {
-              chunks.push(data.content)
-              fullContent += data.content
-              if (onChunk) {
-                onChunk(data.content)
-              }
-            }
-            break
-            
-          case 'chat_thinking':
-            console.debug('WS Thinking:', data.content)
-            break
-            
-          case 'chat_done':
-            clearTimeout(timeoutId)
-            cleanup()
-            resolve({
-              content: data.fullContent || fullContent,
-              finishReason: data.finishReason || 'stop'
-            })
-            break
-            
-          case 'chat_error':
-          case 'error':
-            clearTimeout(timeoutId)
-            cleanup()
-            reject(new Error(data.error || 'WebSocket chat error'))
-            break
-        }
-      })
-
-      // Send the chat request
-      try {
-        sendMessage({
-          type: 'chat',
-          requestId,
-          messages,
-          model: selectedModel.value?.id || 'gpt-4.1',
-          ...(systemPrompt && { systemPrompt }),
-          ...(temperature !== null && { temperature })
-        })
-        console.debug('WS chat request sent:', requestId)
-      } catch (err) {
-        clearTimeout(timeoutId)
-        cleanup()
-        reject(err)
-      }
-    })
-  }
-
-  /**
-   * Stream chat using selected method
-   * @param {Array|string} messages - Array of message objects or single message string
-   * @param {string|null} systemPrompt - Optional system prompt
-   * @param {number|null} temperature - Optional temperature
-   * @param {Function|null} onChunk - Callback for streaming chunks
-   * @returns {Promise<Object>} Chat response
-   */
-  const streamChat = async (messages, systemPrompt = null, temperature = null, onChunk = null) => {
-    if (!selectedModel.value) {
-      throw new Error('No model selected')
-    }
-
-    if (!selectedModel.value.available) {
-      throw new Error(`Model ${selectedModel.value.name} is not available. Please configure the required API key.`)
-    }
-
-    // Normalize messages to array format
-    const normalizedMessages = typeof messages === 'string'
-      ? [{ role: 'user', content: messages }]
-      : messages
-
-    if (streamMethod.value === 'ws') {
-      // Fall back to SSE if WebSocket not connected
-      if (!isConnected.value) {
-        console.warn('WebSocket not connected, falling back to SSE')
-        return streamChatSSE(normalizedMessages, systemPrompt, temperature, onChunk)
-      }
-      return streamChatWebSocket(normalizedMessages, systemPrompt, temperature, onChunk)
-    } else {
-      return streamChatSSE(normalizedMessages, systemPrompt, temperature, onChunk)
-    }
-  }
-
-  /**
-   * Send a non-streaming chat message
-   * @param {Array|string} messages - Array of message objects or single message string
-   * @param {string|null} systemPrompt - Optional system prompt
-   * @param {number|null} temperature - Optional temperature
-   * @returns {Promise<Object>} Chat response
-   */
-  const chat = async (messages, systemPrompt = null, temperature = null) => {
-    if (!selectedModel.value) {
-      throw new Error('No model selected')
-    }
-
-    if (!selectedModel.value.available) {
-      throw new Error(`Model ${selectedModel.value.name} is not available. Please configure the required API key.`)
-    }
-
-    // Normalize messages to array format
-    const normalizedMessages = typeof messages === 'string'
-      ? [{ role: 'user', content: messages }]
-      : messages
-
-    try {
-      const response = await api.post('/llm/chat', {
-        messages: normalizedMessages,
-        model: selectedModel.value.id,
-        ...(systemPrompt && { systemPrompt }),
-        ...(temperature !== null && { temperature })
-      })
-      return response.data.data
-    } catch (err) {
-      throw new Error(err.response?.data?.message || err.response?.data?.error || err.message || 'Chat error')
-    }
-  }
-
-  /**
-   * Set stream method and persist to localStorage
-   * @param {string} method - 'sse' or 'ws'
-   */
-  const setStreamMethod = (method) => {
-    if (method === 'sse' || method === 'ws') {
-      streamMethod.value = method
-      localStorage.setItem('llmStreamMethod', method)
-    }
-  }
-
-  /**
    * Select a model by ID or model object
-   * @param {string|Object} modelOrId - Model ID or model object
+   * @param {string|Object} modelOrId
    */
   const selectModel = (modelOrId) => {
     if (typeof modelOrId === 'string') {
@@ -379,22 +110,435 @@ export const useLlm = () => {
   }
 
   /**
-   * Initialize composable - only fetch once
+   * Set stream method and persist
+   * @param {string} method - 'sse' or 'ws'
    */
-  const initialize = async () => {
-    if (!isInitialized.value) {
-      isInitialized.value = true
-      await Promise.all([
-        fetchModels(),
-        fetchProviders()
-      ])
+  const setStreamMethod = (method) => {
+    if (method === 'sse' || method === 'ws') {
+      streamMethod.value = method
+      localStorage.setItem('llmStreamMethod', method)
     }
   }
 
-  // Initialize on mount
-  onMounted(() => {
-    initialize()
-  })
+  // ============================================================================
+  // SSE STREAMING
+  // ============================================================================
+
+  /**
+   * Stream chat via SSE (Server-Sent Events)
+   * Used as fallback when WebSocket is not available
+   * @param {Object} options - Request options
+   * @returns {Promise<Object>}
+   */
+  const streamChatSSE = async (options) => {
+    const {
+      taskId,
+      messages,
+      model,
+      systemPrompt,
+      temperature,
+      maxTokens,
+      onChunk,
+      onThinking,
+    } = options
+
+    const requestBody = {
+      messages,
+      model: model || selectedModel.value?.id || 'gpt-4.1',
+      ...(systemPrompt && { systemPrompt }),
+      ...(temperature !== null && temperature !== undefined && { temperature }),
+      ...(maxTokens && { maxTokens }),
+    }
+
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+    let fullContent = ''
+    let finishReason = 'stop'
+
+    return new Promise((resolve, reject) => {
+      const ctrl = new AbortController()
+      
+      // Store abort controller in task if it exists
+      if (taskId && tasks[taskId]) {
+        tasks[taskId]._abortController = ctrl
+      }
+      
+      fetchEventSource(`${baseUrl}/llm/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        signal: ctrl.signal,
+        openWhenHidden: true,
+        
+        onopen: async (response) => {
+          if (response.ok) {
+            if (taskId && tasks[taskId]) {
+              tasks[taskId].status = 'streaming'
+            }
+            return
+          }
+          
+          let errorMessage = `HTTP ${response.status}`
+          try {
+            const errorData = await response.json()
+            errorMessage = errorData.message || errorData.error || errorMessage
+          } catch (e) {
+            // Ignore
+          }
+          throw new Error(errorMessage)
+        },
+        
+        onmessage: (event) => {
+          if (!event.data) return
+          
+          try {
+            const data = JSON.parse(event.data)
+            
+            switch (event.event) {
+              case 'error':
+                ctrl.abort()
+                if (taskId && tasks[taskId]) {
+                  tasks[taskId].status = 'error'
+                  tasks[taskId].error = data.error
+                }
+                reject(new Error(data.error || 'Stream error'))
+                break
+                
+              case 'content':
+                if (data.content) {
+                  fullContent += data.content
+                  if (taskId && tasks[taskId]) {
+                    tasks[taskId].content = fullContent
+                    tasks[taskId].chunkCount++
+                  }
+                  if (onChunk) onChunk(data.content)
+                }
+                break
+                
+              case 'thinking':
+                if (data.content) {
+                  if (taskId && tasks[taskId]) {
+                    tasks[taskId].thinking += data.content
+                  }
+                  if (onThinking) onThinking(data.content)
+                }
+                break
+                
+              case 'done':
+                finishReason = data.finishReason || 'stop'
+                break
+                
+              case 'end':
+                ctrl.abort()
+                if (taskId && tasks[taskId]) {
+                  tasks[taskId].status = 'done'
+                  tasks[taskId].finishReason = finishReason
+                  tasks[taskId].completedAt = Date.now()
+                }
+                resolve({ content: fullContent, finishReason })
+                break
+            }
+          } catch (parseErr) {
+            console.warn('SSE parse error:', parseErr.message)
+          }
+        },
+        
+        onclose: () => {
+          if (fullContent) {
+            resolve({ content: fullContent, finishReason })
+          }
+        },
+        
+        onerror: (err) => {
+          ctrl.abort()
+          if (taskId && tasks[taskId]) {
+            tasks[taskId].status = 'error'
+            tasks[taskId].error = err.message
+          }
+          reject(err)
+          throw err
+        }
+      }).catch(reject)
+    })
+  }
+
+  // ============================================================================
+  // WEBSOCKET STREAMING
+  // ============================================================================
+
+  /**
+   * Stream chat via WebSocket
+   * @param {Object} options - Request options
+   * @returns {Promise<Object>}
+   */
+  const streamChatWebSocket = async (options) => {
+    const {
+      taskId: providedTaskId,
+      messages,
+      model,
+      systemPrompt,
+      temperature,
+      maxTokens,
+      onChunk,
+      onThinking,
+    } = options
+
+    if (!isConnected.value) {
+      throw new Error('WebSocket not connected')
+    }
+
+    // Create task (uses provided ID or generates new one)
+    const taskId = createTask('llm', {
+      taskId: providedTaskId,
+      model: model || selectedModel.value?.id,
+      onChunk,
+      onThinking,
+    })
+
+    // Send the request
+    sendMessage({
+      type: 'llm:start',
+      taskId,
+      model: model || selectedModel.value?.id || 'gpt-4.1',
+      messages,
+      ...(systemPrompt && { systemPrompt }),
+      ...(temperature !== null && temperature !== undefined && { temperature }),
+      ...(maxTokens && { maxTokens }),
+    })
+
+    // Wait for completion
+    return waitForTask(taskId)
+  }
+
+  // ============================================================================
+  // MAIN API
+  // ============================================================================
+
+  /**
+   * Start a streaming chat request
+   * Returns immediately with taskId - use waitForTask or callbacks to get results
+   * 
+   * @param {Object} options - Request options
+   * @param {Array} options.messages - Array of { role, content } messages
+   * @param {string} [options.model] - Model ID (uses selectedModel if not provided)
+   * @param {string} [options.systemPrompt] - System prompt
+   * @param {number} [options.temperature] - Temperature (0-1)
+   * @param {number} [options.maxTokens] - Max tokens
+   * @param {Function} [options.onChunk] - Callback for each content chunk
+   * @param {Function} [options.onThinking] - Callback for thinking content
+   * @param {string} [options.taskId] - Custom task ID (auto-generated if not provided)
+   * @returns {string} Task ID
+   */
+  const startChat = (options) => {
+    const {
+      messages,
+      model,
+      systemPrompt,
+      temperature,
+      maxTokens,
+      onChunk,
+      onThinking,
+      taskId: providedTaskId,
+    } = options
+
+    if (!selectedModel.value && !model) {
+      throw new Error('No model selected')
+    }
+
+    const actualModel = model || selectedModel.value?.id
+    const modelConfig = models.value.find(m => m.id === actualModel)
+    
+    if (modelConfig && !modelConfig.available) {
+      throw new Error(`Model ${modelConfig.name} is not available`)
+    }
+
+    // Normalize messages
+    const normalizedMessages = typeof messages === 'string'
+      ? [{ role: 'user', content: messages }]
+      : messages
+
+    // Create task
+    const taskId = createTask('llm', {
+      taskId: providedTaskId,
+      model: actualModel,
+      onChunk,
+      onThinking,
+    })
+
+    // Determine method and execute
+    const useWebSocket = streamMethod.value === 'ws' && isConnected.value
+
+    if (useWebSocket) {
+      sendMessage({
+        type: 'llm:start',
+        taskId,
+        model: actualModel,
+        messages: normalizedMessages,
+        ...(systemPrompt && { systemPrompt }),
+        ...(temperature !== null && temperature !== undefined && { temperature }),
+        ...(maxTokens && { maxTokens }),
+      })
+    } else {
+      // SSE fallback - start in background
+      streamChatSSE({
+        taskId,
+        messages: normalizedMessages,
+        model: actualModel,
+        systemPrompt,
+        temperature,
+        maxTokens,
+        onChunk,
+        onThinking,
+      }).catch(err => {
+        console.error('SSE stream error:', err)
+      })
+    }
+
+    return taskId
+  }
+
+  /**
+   * Stream chat and return promise (convenience wrapper)
+   * @param {Array|string} messages - Messages or single message string
+   * @param {string|null} systemPrompt - System prompt
+   * @param {number|null} temperature - Temperature
+   * @param {Function|null} onChunk - Chunk callback
+   * @returns {Promise<Object>}
+   */
+  const streamChat = async (messages, systemPrompt = null, temperature = null, onChunk = null) => {
+    const taskId = startChat({
+      messages,
+      systemPrompt,
+      temperature,
+      onChunk,
+    })
+
+    return waitForTask(taskId)
+  }
+
+  /**
+   * Start multiple chat requests in parallel
+   * @param {Array<Object>} requests - Array of request options
+   * @returns {Array<string>} Array of task IDs
+   */
+  const startBatch = (requests) => {
+    return requests.map(options => startChat(options))
+  }
+
+  /**
+   * Start multiple chats and wait for all to complete
+   * @param {Array<Object>} requests - Array of request options
+   * @returns {Promise<Array>} Array of results (settled)
+   */
+  const streamBatch = async (requests) => {
+    const taskIds = startBatch(requests)
+    return Promise.allSettled(taskIds.map(id => waitForTask(id)))
+  }
+
+  /**
+   * Cancel a chat request
+   * @param {string} taskId
+   */
+  const cancel = (taskId) => {
+    cancelTask(taskId, 'llm')
+  }
+
+  /**
+   * Cancel all active chat requests
+   */
+  const cancelAll = () => {
+    cancelAllTasks('llm')
+  }
+
+  /**
+   * Get a specific task's state
+   * @param {string} taskId
+   * @returns {Object|null}
+   */
+  const getTask = (taskId) => {
+    return tasks[taskId] || null
+  }
+
+  /**
+   * Get all LLM tasks
+   * @returns {Array}
+   */
+  const getAllTasks = () => {
+    return Object.values(tasks).filter(t => t.domain === 'llm')
+  }
+
+  /**
+   * Get active (streaming) tasks
+   * @returns {Array}
+   */
+  const getActiveTasks = () => {
+    return getAllTasks().filter(t => t.status === 'streaming' || t.status === 'pending')
+  }
+
+  // ============================================================================
+  // NON-STREAMING API
+  // ============================================================================
+
+  /**
+   * Send a non-streaming chat message (uses REST API)
+   * @param {Array|string} messages - Messages
+   * @param {string|null} systemPrompt - System prompt
+   * @param {number|null} temperature - Temperature
+   * @returns {Promise<Object>}
+   */
+  const chat = async (messages, systemPrompt = null, temperature = null) => {
+    if (!selectedModel.value) {
+      throw new Error('No model selected')
+    }
+
+    if (!selectedModel.value.available) {
+      throw new Error(`Model ${selectedModel.value.name} is not available`)
+    }
+
+    const normalizedMessages = typeof messages === 'string'
+      ? [{ role: 'user', content: messages }]
+      : messages
+
+    try {
+      const response = await api.post('/llm/chat', {
+        messages: normalizedMessages,
+        model: selectedModel.value.id,
+        ...(systemPrompt && { systemPrompt }),
+        ...(temperature !== null && { temperature })
+      })
+      return response.data.data
+    } catch (err) {
+      throw new Error(
+        err.response?.data?.message || 
+        err.response?.data?.error || 
+        err.message || 
+        'Chat error'
+      )
+    }
+  }
+
+  // ============================================================================
+  // INITIALIZATION
+  // ============================================================================
+
+  /**
+   * Initialize composable - fetch models and providers
+   * Call this explicitly from your component's onMounted
+   */
+  const initialize = async () => {
+    if (isInitialized.value) return
+    isInitialized.value = true
+    
+    await Promise.all([
+      fetchModels(),
+      fetchProviders()
+    ])
+  }
+
+  // ============================================================================
+  // EXPORTS
+  // ============================================================================
 
   return {
     // State
@@ -406,17 +550,34 @@ export const useLlm = () => {
     loading,
     error,
     isConnected,
+    tasks,
 
-    // Methods
+    // Model & Provider
     fetchModels,
     fetchProviders,
     getModelsByProvider,
-    streamChat,
-    streamChatSSE,
-    streamChatWebSocket,
-    chat,
-    setStreamMethod,
     selectModel,
-    initialize
+    setStreamMethod,
+    initialize,
+
+    // Streaming API
+    startChat,
+    streamChat,
+    startBatch,
+    streamBatch,
+    cancel,
+    cancelAll,
+
+    // Task management
+    getTask,
+    getAllTasks,
+    getActiveTasks,
+    waitForTask,
+
+    // Non-streaming API
+    chat,
+
+    // Utilities
+    generateTaskId,
   }
 }

@@ -35,7 +35,8 @@ const routes = require("./routes");
 const { requestLogger, errorLogger } = require("./middleware/logging");
 const { notFoundHandler, errorHandler } = require("./middleware/errorHandler");
 const { initializeClients } = require("./services/llmService");
-const { initializeWebSocket } = require("./websocket/llmHandler");
+const { initializeWebSocket, shutdownWebSocket } = require("./websocket");
+
 const logger = require("./utils/logger");
 
 // Initialize Express app
@@ -401,6 +402,9 @@ const gracefulShutdown = async (signal) => {
   // Stop accepting new connections
   server.close(async () => {
     logger.info("HTTP server closed");
+
+    // Shutdown WebSocket server (NEW)
+    await shutdownWebSocket();
 
     // Close database pool if configured
     if (isDbConfigured()) {
