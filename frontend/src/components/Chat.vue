@@ -231,10 +231,13 @@ const props = defineProps({
   initialTemperature: { type: Number, default: 0.7 },
   showHeader: { type: Boolean, default: true },
   forceWebsocket: { type: Boolean, default: false },
+  // Controlled mode: parent manages messages
+  modelValue: { type: Array, default: null }, // v-model for messages
+  // Function to get shared history from other chats
   getSharedHistory: { type: Function, default: null }
 })
 
-const emit = defineEmits(['model-change', 'settings-change', 'add-chat'])
+const emit = defineEmits(['model-change', 'settings-change', 'add-chat', 'update:modelValue'])
 
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -259,8 +262,64 @@ const { isConnected } = useWebSocket()
 const messagesContainer = ref(null)
 const inputTextarea = ref(null)
 
+// Internal state for standalone mode
+const internalMessages = ref([])
+
+// Use controlled messages (from parent) or internal messages (standalone)
+const messages = computed({
+  get: () => props.modelValue !== null ? props.modelValue : internalMessages.value,
+  set: (value) => {
+    if (props.modelValue !== null) {
+      emit('update:modelValue', value)
+    } else {
+      internalMessages.value = value
+    }
+  }
+})
+
+// Helper to push a message (works for both modes)
+const pushMessage = (msg) => {
+  if (props.modelValue !== null) {
+    emit('update:modelValue', [...props.modelValue, msg])
+  } else {
+    internalMessages.value.push(msg)
+  }
+}
+
+// Helper to update a specific message by index
+const updateMessageAt = (index, updates) => {
+  if (props.modelValue !== null) {
+    const newMessages = [...props.modelValue]
+    if (newMessages[index]) {
+      newMessages[index] = { ...newMessages[index], ...updates }
+      emit('update:modelValue', newMessages)
+    }
+  } else {
+    if (internalMessages.value[index]) {
+      Object.assign(internalMessages.value[index], updates)
+    }
+  }
+}
+
+// Helper to update message content (for streaming)
+const appendToMessage = (index, content) => {
+  if (props.modelValue !== null) {
+    const newMessages = [...props.modelValue]
+    if (newMessages[index]) {
+      newMessages[index] = { 
+        ...newMessages[index], 
+        content: newMessages[index].content + content 
+      }
+      emit('update:modelValue', newMessages)
+    }
+  } else {
+    if (internalMessages.value[index]) {
+      internalMessages.value[index].content += content
+    }
+  }
+}
+
 // State
-const messages = ref([])
 const inputMessage = ref('')
 const systemPrompt = ref(props.initialSystemPrompt)
 const temperature = ref(props.initialTemperature)
@@ -344,7 +403,11 @@ const onModelChange = () => {
 
 const confirmClearChat = () => { showClearDialog.value = true }
 const clearChat = () => {
-  messages.value = []
+  if (props.modelValue !== null) {
+    emit('update:modelValue', [])
+  } else {
+    internalMessages.value = []
+  }
   chatError.value = null
   showClearDialog.value = false
 }
@@ -405,14 +468,16 @@ const sendMessage = async (sharedContextOverride = null) => {
   inputMessage.value = ''
   chatError.value = null
 
-  messages.value.push({ role: 'user', content: userMessage })
+  // Add user message
+  pushMessage({ role: 'user', content: userMessage })
   
   // Reset scroll state and force scroll to bottom when user sends
   userScrolled.value = false
   await scrollToBottom(true)
 
+  // Add assistant placeholder
   const assistantMessageIndex = messages.value.length
-  messages.value.push({ role: 'assistant', content: '', isStreaming: true })
+  pushMessage({ role: 'assistant', content: '', isStreaming: true })
 
   // Scroll again to show the streaming indicator
   await scrollToBottom(true)
@@ -425,14 +490,19 @@ const sendMessage = async (sharedContextOverride = null) => {
       .filter(msg => !msg.isStreaming)
       .map(msg => ({ role: msg.role, content: msg.content }))
 
-    // Get shared context - either from override (sendExternalMessage) or from prop function
+    // Debug: Log what we have
+    console.log('[Chat] sendMessage - checking shared history:', {
+      sharedContextOverride: sharedContextOverride,
+      hasGetSharedHistory: !!props.getSharedHistory,
+      getSharedHistoryType: typeof props.getSharedHistory,
+    })
 
-    console.log("sharedContextOverride", sharedContextOverride)
-    console.log("props.getSharedHistory()", props.getSharedHistory())
-    let sharedContext = sharedContextOverride;
+    // Get shared context - either from override (sendExternalMessage) or from prop function
+    let sharedContext = sharedContextOverride
     if (!sharedContext && props.getSharedHistory) {
+      console.log('[Chat] Calling props.getSharedHistory()...')
       sharedContext = props.getSharedHistory()
-      console.log('[Chat] Got shared history from prop function:', sharedContext?.length || 0, 'chats')
+      console.log('[Chat] Got shared history from prop function:', sharedContext)
     }
 
     // If shared context provided, insert it as a user message BEFORE the last user message
@@ -458,6 +528,8 @@ const sendMessage = async (sharedContextOverride = null) => {
         contextCount: sharedContext.length,
         messagesArrayLength: messagesArray.length 
       })
+    } else {
+      console.log('[Chat] No shared context to inject:', { sharedContext })
     }
 
     // Use the systemPrompt directly (no longer mixing with shared history)
@@ -484,27 +556,32 @@ const sendMessage = async (sharedContextOverride = null) => {
       temperature: temperature.value,
       forceMethod,
       onChunk: (chunk) => {
-        if (messages.value[assistantMessageIndex]) {
-          messages.value[assistantMessageIndex].content += chunk
-          scrollToBottom()
-        }
+        // Use helper to append content (works in both controlled and standalone modes)
+        appendToMessage(assistantMessageIndex, chunk)
+        scrollToBottom()
       }
     })
 
     currentTaskId.value = taskId
     await waitForTask(taskId)
 
-    if (messages.value[assistantMessageIndex]) {
-      messages.value[assistantMessageIndex].isStreaming = false
-    }
+    // Mark streaming complete
+    updateMessageAt(assistantMessageIndex, { isStreaming: false })
     await scrollToBottom()
   } catch (err) {
     if (err.message !== 'Task cancelled') {
       chatError.value = err.message || t('chat.error')
       if (!messages.value[assistantMessageIndex]?.content) {
-        messages.value.splice(assistantMessageIndex - 1, 2)
+        // Remove both user and empty assistant messages on error
+        if (props.modelValue !== null) {
+          const newMessages = [...props.modelValue]
+          newMessages.splice(assistantMessageIndex - 1, 2)
+          emit('update:modelValue', newMessages)
+        } else {
+          internalMessages.value.splice(assistantMessageIndex - 1, 2)
+        }
       } else {
-        messages.value[assistantMessageIndex].isStreaming = false
+        updateMessageAt(assistantMessageIndex, { isStreaming: false })
       }
     }
   } finally {

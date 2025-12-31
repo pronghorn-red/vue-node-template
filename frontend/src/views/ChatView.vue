@@ -112,7 +112,7 @@
             text
             rounded
             size="small"
-            :disabled="!chatRefs[index]?.messages?.length"
+            :disabled="!instance.messages?.length"
             @click="downloadSingleChat(index)"
           />
           <Button
@@ -122,7 +122,7 @@
             text
             rounded
             size="small"
-            :disabled="!chatRefs[index]?.messages?.length"
+            :disabled="!instance.messages?.length"
             @click="clearSingleChat(index)"
           />
           <div class="panel-header-spacer"></div>
@@ -173,6 +173,7 @@
           :initial-temperature="instance.temperature"
           :show-header="chatInstances.length === 1"
           :force-websocket="chatInstances.length > 1"
+          v-model="instance.messages"
           :get-shared-history="() => getSharedHistoryForChat(index)"
           @model-change="(modelId) => instance.modelId = modelId"
           @settings-change="(settings) => updateInstanceSettings(index, settings)"
@@ -230,6 +231,7 @@ const createInstance = (overrides = {}) => ({
   temperature: 0.7,
   shareHistory: false,
   showSettings: false,
+  messages: [], // Messages now managed by parent
   ...overrides
 })
 
@@ -298,15 +300,14 @@ const updateInstanceSettings = (index, settings) => {
 
 // Computed to check if any chat has messages
 const hasAnyMessages = computed(() => {
-  return chatRefs.value.some(ref => ref?.messages?.length > 0)
+  return chatInstances.value.some(instance => instance.messages?.length > 0)
 })
 
 // Download a single chat's messages
 const downloadSingleChat = (index) => {
-  const chatRef = chatRefs.value[index]
-  if (!chatRef?.messages?.length) return
-  
   const instance = chatInstances.value[index]
+  if (!instance?.messages?.length) return
+  
   const name = instance.name || `Chat ${index + 1}`
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   
@@ -314,10 +315,10 @@ const downloadSingleChat = (index) => {
   content += `Exported: ${new Date().toLocaleString()}\n`
   content += `Model: ${instance.modelId || 'Unknown'}\n\n---\n\n`
   
-  chatRef.messages.forEach((msg, msgIndex) => {
+  instance.messages.forEach((msg, msgIndex) => {
     const role = msg.role === 'user' ? 'You' : 'Assistant'
     content += `## ${role}\n\n${msg.content}\n\n`
-    if (msgIndex < chatRef.messages.length - 1) content += `---\n\n`
+    if (msgIndex < instance.messages.length - 1) content += `---\n\n`
   })
   
   const blob = new Blob([content], { type: 'text/markdown' })
@@ -331,9 +332,8 @@ const downloadSingleChat = (index) => {
 
 // Clear a single chat's messages
 const clearSingleChat = (index) => {
-  const chatRef = chatRefs.value[index]
-  if (chatRef?.clearChat) {
-    chatRef.clearChat()
+  if (chatInstances.value[index]) {
+    chatInstances.value[index].messages = []
   }
 }
 
@@ -345,7 +345,6 @@ const downloadAllChats = () => {
   content += `Total Chats: ${chatInstances.value.length}\n\n`
   
   chatInstances.value.forEach((instance, index) => {
-    const chatRef = chatRefs.value[index]
     const name = instance.name || `Chat ${index + 1}`
     
     content += `${'='.repeat(60)}\n`
@@ -353,11 +352,11 @@ const downloadAllChats = () => {
     content += `Model: ${instance.modelId || 'Unknown'}\n`
     content += `${'='.repeat(60)}\n\n`
     
-    if (chatRef?.messages?.length) {
-      chatRef.messages.forEach((msg, msgIndex) => {
+    if (instance.messages?.length) {
+      instance.messages.forEach((msg, msgIndex) => {
         const role = msg.role === 'user' ? 'You' : 'Assistant'
         content += `## ${role}\n\n${msg.content}\n\n`
-        if (msgIndex < chatRef.messages.length - 1) content += `---\n\n`
+        if (msgIndex < instance.messages.length - 1) content += `---\n\n`
       })
     } else {
       content += `*No messages*\n\n`
@@ -384,16 +383,14 @@ const confirmClearAllChats = () => {
 
 // Clear all chats
 const clearAllChats = () => {
-  chatRefs.value.forEach(chatRef => {
-    if (chatRef?.clearChat) {
-      chatRef.clearChat()
-    }
+  chatInstances.value.forEach(instance => {
+    instance.messages = []
   })
   showClearAllDialog.value = false
 }
 
 // Build shared history context from all OTHER chats for the chat at excludeIndex
-// This is called when the chat at excludeIndex has shareHistory enabled
+// Now uses parent-managed messages directly (no need to access child refs)
 const buildSharedHistoryContext = (excludeIndex) => {
   const context = []
   
@@ -401,18 +398,28 @@ const buildSharedHistoryContext = (excludeIndex) => {
     // Skip the chat that's requesting the history
     if (idx === excludeIndex) return
     
-    const chatRef = chatRefs.value[idx]
-    if (!chatRef?.messages?.length) return
+    // Use instance.messages directly (managed by parent)
+    if (!instance.messages?.length) return
     
     const name = instance.name || `Chat ${idx + 1}`
-    const messages = chatRef.messages
     
-    if (messages.length > 0) {
+    // Filter out streaming messages and map to simple format
+    const validMessages = instance.messages
+      .filter(m => !m.isStreaming)
+      .map(m => ({ role: m.role, content: m.content }))
+    
+    if (validMessages.length > 0) {
       context.push({
         name,
-        messages: messages.map(m => ({ role: m.role, content: m.content }))
+        messages: validMessages
       })
     }
+  })
+  
+  console.log('[ChatView] buildSharedHistoryContext:', {
+    excludeIndex,
+    contextLength: context.length,
+    context: context.map(c => ({ name: c.name, messageCount: c.messages.length }))
   })
   
   return context
@@ -421,10 +428,20 @@ const buildSharedHistoryContext = (excludeIndex) => {
 // Get shared history for a specific chat - checks if shareHistory is enabled at call time
 const getSharedHistoryForChat = (index) => {
   const instance = chatInstances.value[index]
+  console.log('[ChatView] getSharedHistoryForChat called:', {
+    index,
+    instanceId: instance?.id,
+    shareHistory: instance?.shareHistory,
+  })
+  
   if (!instance?.shareHistory) {
+    console.log('[ChatView] shareHistory is false, returning null')
     return null
   }
-  return buildSharedHistoryContext(index)
+  
+  const context = buildSharedHistoryContext(index)
+  console.log('[ChatView] Built shared history context:', context)
+  return context
 }
 
 const sendToAll = async () => {
