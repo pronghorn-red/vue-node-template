@@ -6,27 +6,29 @@
  * @module services/llmService
  */
 
-const fs = require('fs');
-const path = require('path');
-const OpenAI = require('openai');
-const Anthropic = require('@anthropic-ai/sdk');
-const { GoogleGenAI } = require('@google/genai');
-const logger = require('../utils/logger');
+const fs = require("fs");
+const path = require("path");
+const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenAI } = require("@google/genai");
+const logger = require("../utils/logger");
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
-const modelsConfigPath = path.join(__dirname, '../config/models.json');
+const modelsConfigPath = path.join(__dirname, "../config/models.json");
 let modelsConfig = null;
 
 const loadModelsConfig = () => {
   if (!modelsConfig) {
     try {
-      modelsConfig = JSON.parse(fs.readFileSync(modelsConfigPath, 'utf8'));
-      logger.info('Models config loaded', { count: modelsConfig.models?.length });
+      modelsConfig = JSON.parse(fs.readFileSync(modelsConfigPath, "utf8"));
+      logger.info("Models config loaded", {
+        count: modelsConfig.models?.length,
+      });
     } catch (error) {
-      logger.error('Failed to load models config', { error: error.message });
+      logger.error("Failed to load models config", { error: error.message });
       modelsConfig = { models: [] };
     }
   }
@@ -63,7 +65,7 @@ const clients = {
 };
 
 const isValidKey = (key) => {
-  return key && key.trim() !== '' && !key.includes('your_') && key !== 'sk-xxx';
+  return key && key.trim() !== "" && !key.includes("your_") && key !== "sk-xxx";
 };
 
 const initializeClients = () => {
@@ -73,7 +75,7 @@ const initializeClients = () => {
       apiKey: process.env.GOOGLE_AI_API_KEY,
     });
     clients.google.configured = true;
-    logger.info('✅ Google AI configured');
+    logger.info("✅ Google AI configured");
   }
 
   // OpenAI
@@ -82,7 +84,7 @@ const initializeClients = () => {
       apiKey: process.env.OPENAI_API_KEY,
     });
     clients.openai.configured = true;
-    logger.info('✅ OpenAI configured');
+    logger.info("✅ OpenAI configured");
   }
 
   // Anthropic
@@ -91,27 +93,27 @@ const initializeClients = () => {
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
     clients.anthropic.configured = true;
-    logger.info('✅ Anthropic configured');
+    logger.info("✅ Anthropic configured");
   }
 
   // xAI (Grok) - OpenAI-compatible
   if (isValidKey(process.env.XAI_API_KEY)) {
     clients.xai.instance = new OpenAI({
       apiKey: process.env.XAI_API_KEY,
-      baseURL: 'https://api.x.ai/v1',
+      baseURL: "https://api.x.ai/v1",
     });
     clients.xai.configured = true;
-    logger.info('✅ xAI configured');
+    logger.info("✅ xAI configured");
   }
 
   // Groq - OpenAI-compatible
   if (isValidKey(process.env.GROQ_API_KEY)) {
     clients.groq.instance = new OpenAI({
       apiKey: process.env.GROQ_API_KEY,
-      baseURL: 'https://api.groq.com/openai/v1',
+      baseURL: "https://api.groq.com/openai/v1",
     });
     clients.groq.configured = true;
-    logger.info('✅ Groq configured');
+    logger.info("✅ Groq configured");
   }
 };
 
@@ -143,40 +145,36 @@ async function streamGoogle(options, onChunk) {
   const { model, messages, systemPrompt, temperature, maxTokens } = options;
   const client = clients.google.instance;
 
-  if (!client) throw new Error('Google AI not configured');
+  if (!client) throw new Error("Google AI not configured");
 
   // Build contents array for Gemini
   const contents = messages.map((msg) => ({
-    role: msg.role === 'assistant' ? 'model' : 'user',
+    role: msg.role === "assistant" ? "model" : "user",
     parts: [{ text: msg.content }],
   }));
 
   // Build request options
   const requestOptions = {
-    model: model || 'gemini-2.0-flash',
+    model: model || "gemini-2.0-flash",
     contents,
+    config:{}
   };
 
   if (systemPrompt) {
-    requestOptions.systemInstruction = { parts: [{ text: systemPrompt }] };
+    requestOptions.config.systemInstruction = systemPrompt;
   }
 
   if (temperature !== undefined) {
-    requestOptions.generationConfig = {
-      ...requestOptions.generationConfig,
-      temperature,
-    };
+    requestOptions.config.temperature = temperature;
   }
 
-  if (maxTokens) {
-    requestOptions.generationConfig = {
-      ...requestOptions.generationConfig,
-      maxOutputTokens: maxTokens,
-    };
+  if (maxTokens !== undefined) {
+    requestOptions.config.maxTokens = maxTokens;
   }
 
-  logger.info('Google stream request', { model: requestOptions.model });
-
+  // === LOG GOOGLE REQUEST ===
+  console.log("[llmService] Google API request:");
+  console.log("  requestOptions:", JSON.stringify(requestOptions));
   const response = await client.models.generateContentStream(requestOptions);
 
   let chunkCount = 0;
@@ -184,12 +182,12 @@ async function streamGoogle(options, onChunk) {
     const part = chunk.candidates?.[0]?.content?.parts?.[0];
 
     if (part?.text) {
-      onChunk({ type: 'content', content: part.text });
+      onChunk({ type: "content", content: part.text });
       chunkCount++;
     }
   }
 
-  onChunk({ type: 'done', finishReason: 'stop', chunkCount });
+  onChunk({ type: "done", finishReason: "stop", chunkCount });
 }
 
 /**
@@ -207,7 +205,7 @@ async function streamOpenAICompatible(options, onChunk, providerName) {
   // Build messages array with system prompt
   const apiMessages = [];
   if (systemPrompt) {
-    apiMessages.push({ role: 'system', content: systemPrompt });
+    apiMessages.push({ role: "system", content: systemPrompt });
   }
   apiMessages.push(...messages);
 
@@ -230,17 +228,17 @@ async function streamOpenAICompatible(options, onChunk, providerName) {
     const finishReason = chunk.choices[0]?.finish_reason;
 
     if (content) {
-      onChunk({ type: 'content', content });
+      onChunk({ type: "content", content });
       chunkCount++;
     }
 
     if (finishReason) {
-      onChunk({ type: 'done', finishReason, chunkCount });
+      onChunk({ type: "done", finishReason, chunkCount });
       return;
     }
   }
 
-  onChunk({ type: 'done', finishReason: 'stop', chunkCount });
+  onChunk({ type: "done", finishReason: "stop", chunkCount });
 }
 
 /**
@@ -252,10 +250,10 @@ async function streamAnthropic(options, onChunk) {
   const { model, messages, systemPrompt, temperature, maxTokens } = options;
   const client = clients.anthropic.instance;
 
-  if (!client) throw new Error('Anthropic not configured');
+  if (!client) throw new Error("Anthropic not configured");
 
   // Filter out system messages (handled separately)
-  const apiMessages = messages.filter((m) => m.role !== 'system');
+  const apiMessages = messages.filter((m) => m.role !== "system");
 
   logger.info('Anthropic stream request', {
     model,
@@ -272,19 +270,23 @@ async function streamAnthropic(options, onChunk) {
 
   let chunkCount = 0;
   for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta?.text) {
-      onChunk({ type: 'content', content: event.delta.text });
+    if (event.type === "content_block_delta" && event.delta?.text) {
+      onChunk({ type: "content", content: event.delta.text });
       chunkCount++;
-    } else if (event.type === 'message_stop') {
-      onChunk({ type: 'done', finishReason: 'stop', chunkCount });
+    } else if (event.type === "message_stop") {
+      onChunk({ type: "done", finishReason: "stop", chunkCount });
       return;
-    } else if (event.type === 'message_delta' && event.delta?.stop_reason) {
-      onChunk({ type: 'done', finishReason: event.delta.stop_reason, chunkCount });
+    } else if (event.type === "message_delta" && event.delta?.stop_reason) {
+      onChunk({
+        type: "done",
+        finishReason: event.delta.stop_reason,
+        chunkCount,
+      });
       return;
     }
   }
 
-  onChunk({ type: 'done', finishReason: 'stop', chunkCount });
+  onChunk({ type: "done", finishReason: "stop", chunkCount });
 }
 
 // ============================================================================
@@ -293,7 +295,7 @@ async function streamAnthropic(options, onChunk) {
 
 /**
  * Stream chat completion from any provider
- * 
+ *
  * @param {Object} options - Streaming options
  * @param {string} options.model - Model ID
  * @param {string} [options.provider] - Provider name (auto-detected from model if not provided)
@@ -302,27 +304,14 @@ async function streamAnthropic(options, onChunk) {
  * @param {number} [options.temperature] - Temperature (0-1)
  * @param {number} [options.maxTokens] - Max tokens
  * @param {Function} options.onChunk - Callback for each chunk: ({ type: 'content'|'done', content?, finishReason? })
- * 
+ *
  * @returns {Promise<void>}
- * 
- * @example
- * await streamChat({
- *   model: 'gemini-2.0-flash',
- *   messages: [{ role: 'user', content: 'Hello!' }],
- *   onChunk: (chunk) => {
- *     if (chunk.type === 'content') {
- *       console.log(chunk.content);
- *     } else if (chunk.type === 'done') {
- *       console.log('Done!', chunk.finishReason);
- *     }
- *   }
- * });
  */
 async function streamChat(options) {
-  const { model, provider, onChunk } = options;
+  const { model, provider, onChunk, systemPrompt, temperature } = options;
 
-  if (typeof onChunk !== 'function') {
-    throw new Error('onChunk callback is required');
+  if (typeof onChunk !== "function") {
+    throw new Error("onChunk callback is required");
   }
 
   // Determine provider from model config or explicit provider
@@ -343,15 +332,15 @@ async function streamChat(options) {
 
   // Route to appropriate streaming function
   switch (actualProvider) {
-    case 'google':
+    case "google":
       return streamGoogle(options, onChunk);
-    case 'openai':
-      return streamOpenAICompatible(options, onChunk, 'openai');
-    case 'xai':
-      return streamOpenAICompatible(options, onChunk, 'xai');
-    case 'groq':
-      return streamOpenAICompatible(options, onChunk, 'groq');
-    case 'anthropic':
+    case "openai":
+      return streamOpenAICompatible(options, onChunk, "openai");
+    case "xai":
+      return streamOpenAICompatible(options, onChunk, "xai");
+    case "groq":
+      return streamOpenAICompatible(options, onChunk, "groq");
+    case "anthropic":
       return streamAnthropic(options, onChunk);
     default:
       throw new Error(`Unsupported provider: ${actualProvider}`);
@@ -373,11 +362,11 @@ async function generateEmbeddings(options) {
   const { model, input } = options;
 
   if (!clients.openai.configured) {
-    throw new Error('OpenAI is not configured for embeddings');
+    throw new Error("OpenAI is not configured for embeddings");
   }
 
   return clients.openai.instance.embeddings.create({
-    model: model || 'text-embedding-3-large',
+    model: model || "text-embedding-3-large",
     input,
   });
 }

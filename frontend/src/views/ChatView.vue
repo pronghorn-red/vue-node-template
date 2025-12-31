@@ -1,125 +1,157 @@
 <!-- src/views/ChatView.vue -->
 <template>
   <div class="chat-view">
-    <!-- Single Chat Mode - Header integrated with Chat component -->
-    <div v-if="chatInstances.length === 1" class="single-chat-mode">
-      <Chat
-        :ref="el => setChatRef(el, 0)"
-        :instance-id="chatInstances[0].id"
-        :initial-model-id="chatInstances[0].modelId"
-        :show-header="true"
-        @model-change="(modelId) => chatInstances[0].modelId = modelId"
-      >
-        <!-- Inject add button into Chat header via slot or we handle it here -->
-      </Chat>
-      <!-- Floating add button for single chat -->
-      <Button
-        class="floating-add-btn"
-        icon="pi pi-plus"
-        rounded
-        v-tooltip.left="$t('chat.addChat')"
-        @click="addChat"
-      />
-    </div>
-
-    <!-- Multi-Chat Mode -->
-    <template v-else>
-      <!-- View Header -->
-      <header class="view-header">
-        <div class="header-left">
-          <h1 class="view-title">{{ $t('chat.title') }}</h1>
-          <div class="connection-badge" :class="{ connected: isConnected }">
-            <span class="status-dot"></span>
-            <span>{{ isConnected ? $t('chat.wsConnected') : $t('chat.wsDisconnected') }}</span>
-          </div>
-        </div>
-        
-        <div class="header-actions">
-          <!-- Parallel Input -->
-          <div class="parallel-input-container">
-            <InputText
-              v-model="parallelMessage"
-              :placeholder="$t('chat.parallelPlaceholder', { count: chatInstances.length })"
-              class="parallel-input"
-              @keydown.enter="sendToAll"
-            />
-            <Button
-              icon="pi pi-send"
-              :label="$t('chat.sendToAll')"
-              :disabled="!parallelMessage.trim() || !hasAvailableModel"
-              @click="sendToAll"
-              size="small"
-            />
-          </div>
-
-          <!-- Chat Management -->
-          <div class="chat-controls">
-            <Button
-              v-tooltip.bottom="$t('chat.addChat')"
-              icon="pi pi-plus"
-              severity="secondary"
-              text
-              @click="addChat"
-            />
-            <Button
-              v-tooltip.bottom="$t('chat.removeChat')"
-              icon="pi pi-minus"
-              severity="secondary"
-              text
-              @click="removeChat"
-            />
-            <span class="chat-count">
-              {{ chatInstances.length }} {{ $t('chat.chats') }}
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <!-- Chat Grid -->
-      <div class="chat-grid" :class="gridClass">
-        <div
-          v-for="(instance, index) in chatInstances"
-          :key="instance.id"
-          class="chat-panel"
-        >
-          <!-- Panel Header -->
-          <div class="panel-header">
-            <span class="panel-title">Chat {{ index + 1 }}</span>
-            <Select
-              v-model="instance.modelId"
-              :options="groupedModels"
-              optionLabel="name"
-              optionValue="id"
-              optionGroupLabel="label"
-              optionGroupChildren="items"
-              optionDisabled="disabled"
-              :placeholder="$t('chat.selectModel')"
-              class="panel-model-select"
-              size="small"
-            />
-            <Button
-              v-tooltip.bottom="$t('chat.closeChat')"
-              icon="pi pi-times"
-              severity="secondary"
-              text
-              rounded
-              size="small"
-              @click="removeSpecificChat(index)"
-              :disabled="chatInstances.length <= 1"
-            />
-          </div>
-          
-          <!-- Chat Component (no header in multi-mode) -->
-          <Chat
-            :ref="el => setChatRef(el, index)"
-            :instance-id="instance.id"
-            :initial-model-id="instance.modelId"
-            :show-header="false"
-            @model-change="(modelId) => instance.modelId = modelId"
-          />
+    <!-- Header - always visible in multi-mode, or floating button in single mode -->
+    <header v-if="chatInstances.length > 1" class="view-header">
+      <div class="header-left">
+        <h1 class="view-title">{{ $t('chat.title') }}</h1>
+        <div class="connection-badge" :class="{ connected: isConnected }">
+          <span class="status-dot"></span>
+          <span>{{ isConnected ? $t('chat.wsConnected') : $t('chat.wsDisconnected') }}</span>
         </div>
       </div>
-    </template>
+      
+      <div class="header-actions">
+        <!-- Parallel Input -->
+        <div class="parallel-input-container">
+          <InputText
+            v-model="parallelMessage"
+            :placeholder="$t('chat.parallelPlaceholder', { count: chatInstances.length })"
+            class="parallel-input"
+            @keydown.enter="sendToAll"
+          />
+          <Button
+            icon="pi pi-send"
+            :disabled="!parallelMessage.trim() || !hasAvailableModel || !isConnected"
+            @click="sendToAll"
+            class="parallel-send-btn"
+            v-tooltip.bottom="$t('chat.sendToAll')"
+          />
+        </div>
+
+        <!-- Chat Management -->
+        <div class="chat-controls">
+          <Button
+            v-tooltip.bottom="$t('chat.addChat')"
+            icon="pi pi-plus"
+            severity="secondary"
+            text
+            @click="addChat"
+          />
+          <Button
+            v-tooltip.bottom="$t('chat.removeChat')"
+            icon="pi pi-minus"
+            severity="secondary"
+            text
+            @click="removeLastChat"
+          />
+          <span class="chat-count">
+            {{ chatInstances.length }} {{ $t('chat.chats') }}
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Floating add button for single chat mode -->
+    <Button
+      v-if="chatInstances.length === 1"
+      class="floating-add-btn"
+      icon="pi pi-plus"
+      rounded
+      v-tooltip.left="$t('chat.addChat')"
+      @click="addChat"
+    />
+
+    <!-- Chat Grid - unified for both single and multi mode -->
+    <div class="chat-grid" :class="gridClass">
+      <div
+        v-for="(instance, index) in chatInstances"
+        :key="instance.id"
+        class="chat-panel"
+        :class="{ 'single-panel': chatInstances.length === 1 }"
+      >
+        <!-- Panel Header (only for multiple chats) -->
+        <div v-if="chatInstances.length > 1" class="panel-header">
+          <InputText
+            v-model="instance.name"
+            :placeholder="`Chat ${index + 1}`"
+            class="panel-name-input"
+            size="small"
+          />
+          <Select
+            v-model="instance.modelId"
+            :options="groupedModels"
+            optionLabel="name"
+            optionValue="id"
+            optionGroupLabel="label"
+            optionGroupChildren="items"
+            optionDisabled="disabled"
+            :placeholder="$t('chat.selectModel')"
+            class="panel-model-select"
+            size="small"
+          />
+          <Button
+            v-tooltip.bottom="$t('chat.settings')"
+            icon="pi pi-cog"
+            severity="secondary"
+            text
+            rounded
+            size="small"
+            @click="instance.showSettings = !instance.showSettings"
+          />
+          <div class="panel-header-spacer"></div>
+          <Checkbox
+            v-model="instance.shareHistory"
+            :binary="true"
+            :inputId="`share-history-${instance.id}`"
+          />
+          <label :for="`share-history-${instance.id}`" class="share-history-label">{{ $t('chat.sharedHistory') }}</label>
+          <Button
+            v-tooltip.bottom="$t('chat.closeChat')"
+            icon="pi pi-times"
+            severity="secondary"
+            text
+            rounded
+            size="small"
+            @click="removeSpecificChat(index)"
+          />
+        </div>
+
+        <!-- Panel Settings (collapsible, only for multiple chats) -->
+        <Transition name="slide-down">
+          <div v-if="chatInstances.length > 1 && instance.showSettings" class="panel-settings">
+            <div class="setting-row">
+              <label>{{ $t('chat.systemPrompt') }}</label>
+              <Textarea
+                v-model="instance.systemPrompt"
+                :placeholder="$t('chat.systemPromptPlaceholder')"
+                :autoResize="true"
+                rows="2"
+                class="panel-system-prompt"
+              />
+            </div>
+            <div class="setting-row">
+              <label>{{ $t('chat.temperature') }}: {{ instance.temperature.toFixed(1) }}</label>
+              <Slider v-model="instance.temperature" :min="0" :max="1" :step="0.1" class="panel-temperature-slider" />
+            </div>
+          </div>
+        </Transition>
+        
+        <!-- Chat Component -->
+        <Chat
+          :key="instance.id"
+          :ref="el => setChatRef(el, index)"
+          :instance-id="instance.id"
+          :initial-model-id="instance.modelId"
+          :initial-system-prompt="instance.systemPrompt"
+          :initial-temperature="instance.temperature"
+          :show-header="chatInstances.length === 1"
+          :force-websocket="chatInstances.length > 1"
+          @model-change="(modelId) => instance.modelId = modelId"
+          @settings-change="(settings) => updateInstanceSettings(index, settings)"
+        />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -132,12 +164,15 @@ import Chat from '@/components/Chat.vue'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
+import Textarea from 'primevue/textarea'
+import Slider from 'primevue/slider'
+import Checkbox from 'primevue/checkbox'
 
 const { t } = useI18n()
 const { models, availableProviders, getModelsByProvider, initialize: initializeLlm } = useLlm()
 const { isConnected } = useWebSocket()
 
-// Chat instances - each has its own model selection
+// Chat instances - each has its own settings
 const chatInstances = ref([])
 const chatRefs = ref([])
 const parallelMessage = ref('')
@@ -147,6 +182,22 @@ const generateId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(
 const getDefaultModelId = () => {
   const available = models.value.find(m => m.available)
   return available?.id || models.value[0]?.id || null
+}
+
+const createInstance = (overrides = {}) => ({
+  id: generateId(),
+  name: '',
+  modelId: getDefaultModelId(),
+  systemPrompt: '',
+  temperature: 0.7,
+  shareHistory: false,
+  showSettings: false,
+  ...overrides
+})
+
+// Define addChat early so it can be used in watch with immediate: true
+const addChat = () => {
+  chatInstances.value.push(createInstance())
 }
 
 onMounted(async () => {
@@ -176,6 +227,7 @@ const groupedModels = computed(() => {
 
 const gridClass = computed(() => {
   const count = chatInstances.value.length
+  if (count === 1) return 'grid-1'
   if (count === 2) return 'grid-2'
   if (count <= 4) return 'grid-4'
   if (count <= 6) return 'grid-6'
@@ -186,14 +238,7 @@ const setChatRef = (el, index) => {
   if (el) chatRefs.value[index] = el
 }
 
-const addChat = () => {
-  chatInstances.value.push({
-    id: generateId(),
-    modelId: getDefaultModelId(),
-  })
-}
-
-const removeChat = () => {
+const removeLastChat = () => {
   if (chatInstances.value.length > 1) {
     chatInstances.value.pop()
     chatRefs.value.pop()
@@ -207,19 +252,58 @@ const removeSpecificChat = (index) => {
   }
 }
 
+const updateInstanceSettings = (index, settings) => {
+  if (chatInstances.value[index]) {
+    Object.assign(chatInstances.value[index], settings)
+  }
+}
+
+// Build shared history context for instances that have shareHistory enabled
+const buildSharedHistoryContext = (excludeIndex) => {
+  const context = []
+  
+  chatInstances.value.forEach((instance, idx) => {
+    if (idx === excludeIndex) return
+    if (!instance.shareHistory) return
+    
+    const chatRef = chatRefs.value[idx]
+    if (!chatRef?.messages?.length) return
+    
+    const name = instance.name || `Chat ${idx + 1}`
+    const messages = chatRef.messages
+    
+    if (messages.length > 0) {
+      context.push({
+        name,
+        messages: messages.map(m => ({ role: m.role, content: m.content }))
+      })
+    }
+  })
+  
+  return context
+}
+
 const sendToAll = async () => {
-  if (!parallelMessage.value.trim()) return
+  if (!parallelMessage.value.trim() || !isConnected.value) return
   
   const message = parallelMessage.value.trim()
   parallelMessage.value = ''
   
   await nextTick()
+  
   chatRefs.value.forEach((chatRef, index) => {
-    if (chatRef?.sendExternalMessage) {
-      // Use each instance's own model
-      const modelId = chatInstances.value[index]?.modelId
-      chatRef.sendExternalMessage(message, modelId)
+    if (!chatRef?.sendExternalMessage) return
+    
+    const instance = chatInstances.value[index]
+    const modelId = instance?.modelId
+    
+    // Build shared history context if this instance has shareHistory enabled
+    let sharedContext = null
+    if (instance?.shareHistory) {
+      sharedContext = buildSharedHistoryContext(index)
     }
+    
+    chatRef.sendExternalMessage(message, modelId, sharedContext)
   })
 }
 </script>
@@ -230,16 +314,10 @@ const sendToAll = async () => {
   flex-direction: column;
   height: calc(100vh - 64px);
   background: var(--p-surface-ground);
-}
-
-/* Single Chat Mode */
-.single-chat-mode {
   position: relative;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
 }
 
+/* Floating add button for single chat mode */
 .floating-add-btn {
   position: absolute;
   top: 0.75rem;
@@ -306,10 +384,35 @@ const sendToAll = async () => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  background: var(--p-surface-card);
+  border: 2px solid var(--p-surface-300);
+  border-radius: 1.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 1rem;
+}
+
+.parallel-input-container:focus-within {
+  border-color: var(--p-primary-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--p-primary-color) 15%, transparent);
 }
 
 .parallel-input {
-  min-width: 300px;
+  min-width: 280px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0.25rem 0 !important;
+}
+
+.parallel-input:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.parallel-send-btn {
+  border-radius: 50% !important;
+  width: 2.25rem !important;
+  height: 2.25rem !important;
+  padding: 0 !important;
 }
 
 .chat-controls {
@@ -328,28 +431,38 @@ const sendToAll = async () => {
 .chat-grid {
   flex: 1;
   display: grid;
-  gap: 1px;
-  background: var(--p-surface-border);
   overflow: hidden;
 }
 
-.grid-2 {
-  grid-template-columns: repeat(2, 1fr);
+.chat-grid.grid-1 {
+  grid-template-columns: 1fr;
 }
 
-.grid-4 {
+.chat-grid.grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.chat-grid.grid-4 {
   grid-template-columns: repeat(2, 1fr);
   grid-template-rows: repeat(2, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
 }
 
-.grid-6 {
+.chat-grid.grid-6 {
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: repeat(2, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
 }
 
-.grid-many {
+.chat-grid.grid-many {
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   grid-auto-rows: minmax(300px, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
 }
 
 /* Chat Panel */
@@ -360,6 +473,15 @@ const sendToAll = async () => {
   overflow: hidden;
 }
 
+.chat-panel:not(.single-panel) {
+  border: 2px solid var(--p-surface-300);
+  border-radius: 0.75rem;
+}
+
+.chat-panel.single-panel {
+  /* No border for single chat - it fills the whole space */
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -368,30 +490,84 @@ const sendToAll = async () => {
   background: var(--p-surface-100);
   border-bottom: 1px solid var(--p-surface-border);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
-.panel-title {
-  font-size: 0.875rem;
+.panel-name-input {
+  width: 120px;
   font-weight: 600;
-  color: var(--p-text-color);
 }
 
 .panel-model-select {
+  min-width: 140px;
+  max-width: 180px;
+}
+
+.panel-header-spacer {
   flex: 1;
-  max-width: 200px;
+}
+
+.share-history-label {
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Panel Settings */
+.panel-settings {
+  padding: 0.75rem;
+  background: var(--p-surface-50);
+  border-bottom: 1px solid var(--p-surface-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.setting-row label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--p-text-muted-color);
+}
+
+.panel-system-prompt {
+  font-size: 0.8125rem;
+}
+
+.panel-temperature-slider {
+  width: 100%;
+}
+
+/* Transitions */
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition: all 0.2s ease;
+}
+
+.slide-down-enter-from,
+.slide-down-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 /* Responsive */
 @media (max-width: 1200px) {
-  .grid-6 {
+  .chat-grid.grid-6 {
     grid-template-columns: repeat(2, 1fr);
     grid-template-rows: repeat(3, 1fr);
   }
 }
 
 @media (max-width: 900px) {
-  .grid-4,
-  .grid-6 {
+  .chat-grid.grid-4,
+  .chat-grid.grid-6 {
     grid-template-columns: 1fr;
     grid-auto-rows: minmax(250px, 1fr);
   }
@@ -421,8 +597,16 @@ const sendToAll = async () => {
     min-width: 0;
   }
   
-  .grid-2 {
+  .chat-grid.grid-2 {
     grid-template-columns: 1fr;
+  }
+  
+  .panel-header {
+    flex-wrap: wrap;
+  }
+  
+  .panel-name-input {
+    width: 100px;
   }
 }
 
@@ -437,12 +621,21 @@ const sendToAll = async () => {
   color: var(--p-green-400);
 }
 
+:root.dark .chat-panel:not(.single-panel) {
+  border-color: var(--p-surface-600);
+}
+
 :root.dark .panel-header {
   background: var(--p-surface-800);
   border-color: var(--p-surface-700);
 }
 
-:root.dark .panel-title {
-  color: var(--p-text-color);
+:root.dark .panel-settings {
+  background: var(--p-surface-900);
+  border-color: var(--p-surface-700);
+}
+
+:root.dark .parallel-input-container {
+  border-color: var(--p-surface-500);
 }
 </style>

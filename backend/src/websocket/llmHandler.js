@@ -39,6 +39,8 @@ const CONFIG = {
  * @param {string} action - Action part of message type (e.g., 'start', 'cancel')
  */
 const handleMessage = async (connection, message, action) => {
+  console.log(`[llmHandler] Received action: ${action}`);
+  
   switch (action) {
     case 'start':
       await handleStart(connection, message);
@@ -82,6 +84,20 @@ const handleStart = async (connection, message) => {
   // Generate or use provided task ID
   const taskId = message.taskId || generateTaskId();
   
+  // === WEBSOCKET BACKEND LOGGING ===
+  console.log('\n========== WEBSOCKET REQUEST RECEIVED ==========');
+  console.log('[llmHandler] llm:start message received:');
+  console.log('  connectionId:', connectionId);
+  console.log('  taskId:', taskId);
+  console.log('  model:', message.model);
+  console.log('  provider:', message.provider);
+  console.log('  messageCount:', message.messages?.length);
+  console.log('  systemPrompt:', message.systemPrompt ? `"${message.systemPrompt.substring(0, 100)}${message.systemPrompt.length > 100 ? '...' : ''}"` : null);
+  console.log('  temperature:', message.temperature);
+  console.log('  maxTokens:', message.maxTokens);
+  console.log('  Full message object:', JSON.stringify(message, null, 2));
+  console.log('=================================================\n');
+  
   // Check concurrent task limit
   if (activeTasks.size >= CONFIG.maxConcurrentTasks) {
     sendMessage(ws, {
@@ -104,7 +120,7 @@ const handleStart = async (connection, message) => {
     temperature,
     maxTokens,
   } = message;
-  
+
   // Validate input
   if (!messages && !content) {
     sendMessage(ws, {
@@ -152,12 +168,23 @@ const handleStart = async (connection, message) => {
     provider: actualProvider,
   });
   
+  // === LOG WHAT WE'RE SENDING TO LLM SERVICE ===
+  console.log('[llmHandler] Calling llmService.streamChat with:');
+  console.log('  provider:', actualProvider);
+  console.log('  model:', model);
+  console.log('  messageCount:', messagesToSend.length);
+  console.log('  systemPrompt:', systemPrompt ? `"${systemPrompt.substring(0, 100)}..."` : null);
+  console.log('  temperature:', temperature);
+  console.log('  maxTokens:', maxTokens);
+  
   logger.info('LLM task started', {
     connectionId,
     taskId,
     model,
     provider: actualProvider,
     messageCount: messagesToSend.length,
+    hasSystemPrompt: !!systemPrompt,
+    systemPromptLength: systemPrompt?.length,
     userId: user?.id || 'anonymous',
   });
   
@@ -258,7 +285,6 @@ const handleStart = async (connection, message) => {
               chunkCount,
               contentLength: fullContent.length,
               finishReason: chunk.finishReason,
-              duration: Date.now() - activeTasks.get(taskId)?.startedAt,
             });
             break;
         }
@@ -294,6 +320,8 @@ const handleStart = async (connection, message) => {
       provider: actualProvider,
       model,
     });
+    
+    console.error('[llmHandler] LLM task error:', error.message);
     
     sendMessage(ws, {
       type: 'llm:error',

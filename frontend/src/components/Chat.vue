@@ -220,10 +220,13 @@ import Dialog from 'primevue/dialog'
 const props = defineProps({
   instanceId: { type: String, default: null },
   initialModelId: { type: String, default: null },
-  showHeader: { type: Boolean, default: true }
+  initialSystemPrompt: { type: String, default: '' },
+  initialTemperature: { type: Number, default: 0.7 },
+  showHeader: { type: Boolean, default: true },
+  forceWebsocket: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['model-change'])
+const emit = defineEmits(['model-change', 'settings-change'])
 
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -251,8 +254,8 @@ const inputTextarea = ref(null)
 // State
 const messages = ref([])
 const inputMessage = ref('')
-const systemPrompt = ref('')
-const temperature = ref(0.7)
+const systemPrompt = ref(props.initialSystemPrompt)
+const temperature = ref(props.initialTemperature)
 const isStreaming = ref(false)
 const chatError = ref(null)
 const selectedModelId = ref(null)
@@ -379,7 +382,7 @@ const downloadChat = () => {
   URL.revokeObjectURL(url)
 }
 
-const sendMessage = async () => {
+const sendMessage = async (sharedContext = null) => {
   if (!canSend.value) return
 
   const userMessage = inputMessage.value.trim()
@@ -396,15 +399,44 @@ const sendMessage = async () => {
   isStreaming.value = true
 
   try {
-    const messagesArray = messages.value
+    // Build messages array (exclude streaming placeholder)
+    let messagesArray = messages.value
       .filter(msg => !msg.isStreaming)
       .map(msg => ({ role: msg.role, content: msg.content }))
 
+    // If shared context provided, prepend it as system context
+    let effectiveSystemPrompt = systemPrompt.value || null
+    console.log('[Chat] sendMessage - systemPrompt:', { raw: systemPrompt.value, effective: effectiveSystemPrompt })
+    if (sharedContext && sharedContext.length > 0) {
+      const contextStr = sharedContext.map(ctx => {
+        const msgSummary = ctx.messages.map(m => `[${m.role}]: ${m.content}`).join('\n')
+        return `=== ${ctx.name} ===\n${msgSummary}`
+      }).join('\n\n')
+      
+      effectiveSystemPrompt = effectiveSystemPrompt 
+        ? `${effectiveSystemPrompt}\n\n--- Shared Chat History ---\n${contextStr}`
+        : `--- Shared Chat History ---\n${contextStr}`
+    }
+
+    // Determine which method to use
+    // forceWebsocket prop forces WebSocket for multi-chat mode
+    // otherwise respect localStreamMethod setting
+    const forceMethod = props.forceWebsocket ? 'ws' : (localStreamMethod.value === 'sse' ? 'sse' : null)
+
+    console.log('[Chat] sendMessage routing:', {
+      forceWebsocket: props.forceWebsocket,
+      localStreamMethod: localStreamMethod.value,
+      forceMethod,
+      isConnected: isConnected.value,
+    })
+
+    // Always use startChat - it handles routing internally
     const taskId = startChat({
       messages: messagesArray,
       model: selectedModelId.value,
-      systemPrompt: systemPrompt.value || null,
+      systemPrompt: effectiveSystemPrompt,
       temperature: temperature.value,
+      forceMethod,
       onChunk: (chunk) => {
         if (messages.value[assistantMessageIndex]) {
           messages.value[assistantMessageIndex].content += chunk
@@ -437,14 +469,14 @@ const sendMessage = async () => {
   }
 }
 
-const sendExternalMessage = async (message, modelId) => {
+const sendExternalMessage = async (message, modelId, sharedContext = null) => {
   if (!message?.trim() || isStreaming.value) return
   if (modelId && modelId !== selectedModelId.value) {
     selectedModelId.value = modelId
   }
   inputMessage.value = message
   await nextTick()
-  sendMessage()
+  sendMessage(sharedContext)
 }
 
 defineExpose({ sendExternalMessage, clearChat, messages })
@@ -452,7 +484,7 @@ defineExpose({ sendExternalMessage, clearChat, messages })
 onMounted(async () => {
   await initializeLlm()
   
-  // Use prop or find first available model - don't use shared selectedModel
+  // Use prop or find first available model
   if (props.initialModelId) {
     selectedModelId.value = props.initialModelId
   } else if (models.value.length > 0) {
@@ -460,7 +492,17 @@ onMounted(async () => {
     selectedModelId.value = (availableModel || models.value[0]).id
   }
   
-  localStreamMethod.value = streamMethod.value || 'ws'
+  // Initialize from props
+  systemPrompt.value = props.initialSystemPrompt
+  temperature.value = props.initialTemperature
+  
+  // Force WebSocket if prop is set, otherwise use saved preference
+  if (props.forceWebsocket) {
+    localStreamMethod.value = 'ws'
+  } else {
+    localStreamMethod.value = streamMethod.value || 'ws'
+  }
+  
   await nextTick()
   inputTextarea.value?.$el?.focus()
 })
@@ -469,6 +511,27 @@ watch(() => props.initialModelId, (newVal) => {
   if (newVal && newVal !== selectedModelId.value) {
     selectedModelId.value = newVal
   }
+})
+
+watch(() => props.initialSystemPrompt, (newVal, oldVal) => {
+  // Update local state when prop changes
+  systemPrompt.value = newVal || ''
+}, { immediate: false })
+
+watch(() => props.initialTemperature, (newVal) => {
+  // Update local state when prop changes
+  if (newVal !== undefined && newVal !== null) {
+    temperature.value = newVal
+  }
+}, { immediate: false })
+
+// Emit settings changes back to parent
+watch(systemPrompt, (newVal) => {
+  emit('settings-change', { systemPrompt: newVal })
+})
+
+watch(temperature, (newVal) => {
+  emit('settings-change', { temperature: newVal })
 })
 
 watch(models, () => {

@@ -16,10 +16,6 @@ const logger = require('../utils/logger');
 /**
  * Sets up SSE headers and returns helper functions for streaming.
  * 
- * IMPORTANT: Uses res.writable check instead of close event tracking.
- * The close event can fire prematurely in some Node.js/Express setups,
- * causing the connection to appear closed before streaming completes.
- * 
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @returns {Object} SSE helper functions
@@ -29,12 +25,11 @@ const setupSSE = (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering
-  res.setHeader('Content-Encoding', 'identity'); // Prevent compression
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('Content-Encoding', 'identity');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();
 
-  // Track disconnection for logging only (don't use to block writes)
   req.on('close', () => {
     logger.info('Client disconnected during SSE stream');
   });
@@ -42,14 +37,7 @@ const setupSSE = (req, res) => {
     logger.error('Request error:', err);
   });
 
-  /**
-   * Write an SSE event to the response
-   * @param {string} eventName - Event name
-   * @param {Object} data - Event data
-   * @returns {boolean} Whether the write was successful
-   */
   const writeEvent = (eventName, data) => {
-    // Check if socket is actually writable (NOT using close event flag)
     if (!res.writable || res.writableEnded) {
       return false;
     }
@@ -57,7 +45,6 @@ const setupSSE = (req, res) => {
     const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
     res.write(payload);
 
-    // Force flush
     if (typeof res.flush === 'function') {
       res.flush();
     }
@@ -92,14 +79,33 @@ const handleStreamChat = async (req, res) => {
     // Extract request parameters
     const { model, provider, messages, systemPrompt, temperature, maxTokens } = req.body;
 
+    // === SSE BACKEND LOGGING ===
+    console.log('\n========== SSE REQUEST RECEIVED ==========');
+    console.log('[llmController] SSE /llm/chat/stream request:');
+    console.log('  model:', model);
+    console.log('  provider:', provider);
+    console.log('  messageCount:', messages?.length);
+    console.log('  systemPrompt:', systemPrompt ? `"${systemPrompt.substring(0, 100)}${systemPrompt.length > 100 ? '...' : ''}"` : null);
+    console.log('  temperature:', temperature);
+    console.log('  maxTokens:', maxTokens);
+    console.log('  Full messages:', JSON.stringify(messages, null, 2));
+    console.log('==========================================\n');
+    
+    logger.info('SSE stream request', { 
+      model, 
+      provider, 
+      messageCount: messages?.length,
+      hasSystemPrompt: !!systemPrompt,
+      systemPromptLength: systemPrompt?.length,
+      temperature,
+    });
+
     // Validate required fields
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       sse.writeEvent('error', { error: 'Messages array is required' });
       sse.end();
       return;
     }
-
-    logger.info('SSE stream request', { model, provider, messageCount: messages.length });
 
     // Stream using the service with callback
     await llmService.streamChat({
@@ -127,6 +133,7 @@ const handleStreamChat = async (req, res) => {
     });
   } catch (err) {
     logger.error('Stream error', { error: err.message });
+    console.error('[llmController] SSE stream error:', err.message);
     if (sse.isConnected()) {
       sse.writeEvent('error', {
         error: 'Stream failed',
@@ -272,7 +279,6 @@ const getHealth = async (req, res) => {
 // ============================================================================
 
 module.exports = {
-  // Route handlers
   handleStreamChat,
   getModels,
   getProviders,

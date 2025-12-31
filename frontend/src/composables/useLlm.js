@@ -151,6 +151,18 @@ export const useLlm = () => {
     }
 
     const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+    
+    // === SSE REQUEST LOGGING ===
+    console.log('[useLlm] SSE request to:', `${baseUrl}/llm/chat/stream`)
+    console.log('[useLlm] SSE request body:', {
+      model: requestBody.model,
+      messageCount: requestBody.messages?.length,
+      messages: requestBody.messages?.map(m => ({ role: m.role, contentLength: m.content?.length })),
+      systemPrompt: requestBody.systemPrompt ? `"${requestBody.systemPrompt.substring(0, 100)}${requestBody.systemPrompt.length > 100 ? '...' : ''}"` : null,
+      temperature: requestBody.temperature,
+      maxTokens: requestBody.maxTokens,
+    })
+    
     let fullContent = ''
     let finishReason = 'stop'
 
@@ -172,6 +184,7 @@ export const useLlm = () => {
         openWhenHidden: true,
         
         onopen: async (response) => {
+          console.log('[useLlm] SSE connection opened, status:', response.status)
           if (response.ok) {
             if (taskId && tasks[taskId]) {
               tasks[taskId].status = 'streaming'
@@ -328,6 +341,7 @@ export const useLlm = () => {
    * @param {Function} [options.onChunk] - Callback for each content chunk
    * @param {Function} [options.onThinking] - Callback for thinking content
    * @param {string} [options.taskId] - Custom task ID (auto-generated if not provided)
+   * @param {string} [options.forceMethod] - Force 'ws' or 'sse' regardless of global setting
    * @returns {string} Task ID
    */
   const startChat = (options) => {
@@ -340,7 +354,20 @@ export const useLlm = () => {
       onChunk,
       onThinking,
       taskId: providedTaskId,
+      forceMethod,
     } = options
+
+    // === FRONTEND LOGGING ===
+    console.log('[useLlm] startChat called with:', {
+      model: model || selectedModel.value?.id,
+      messageCount: messages?.length,
+      systemPrompt: systemPrompt ? `"${systemPrompt.substring(0, 50)}${systemPrompt.length > 50 ? '...' : ''}"` : null,
+      temperature,
+      maxTokens,
+      hasOnChunk: !!onChunk,
+      providedTaskId,
+      forceMethod,
+    })
 
     if (!selectedModel.value && !model) {
       throw new Error('No model selected')
@@ -367,10 +394,26 @@ export const useLlm = () => {
     })
 
     // Determine method and execute
-    const useWebSocket = streamMethod.value === 'ws' && isConnected.value
+    // forceMethod overrides the global streamMethod setting
+    let useWebSocket
+    if (forceMethod === 'ws') {
+      useWebSocket = isConnected.value // Force WS if connected
+    } else if (forceMethod === 'sse') {
+      useWebSocket = false // Force SSE
+    } else {
+      useWebSocket = streamMethod.value === 'ws' && isConnected.value
+    }
+
+    console.log('[useLlm] startChat routing:', {
+      taskId,
+      useWebSocket,
+      forceMethod,
+      streamMethod: streamMethod.value,
+      isConnected: isConnected.value,
+    })
 
     if (useWebSocket) {
-      sendMessage({
+      const wsPayload = {
         type: 'llm:start',
         taskId,
         model: actualModel,
@@ -378,10 +421,21 @@ export const useLlm = () => {
         ...(systemPrompt && { systemPrompt }),
         ...(temperature !== null && temperature !== undefined && { temperature }),
         ...(maxTokens && { maxTokens }),
+      }
+      
+      console.log('[useLlm] WebSocket payload:', {
+        type: wsPayload.type,
+        taskId: wsPayload.taskId,
+        model: wsPayload.model,
+        messageCount: wsPayload.messages?.length,
+        systemPrompt: wsPayload.systemPrompt ? `"${wsPayload.systemPrompt.substring(0, 50)}..."` : null,
+        temperature: wsPayload.temperature,
       })
+      
+      sendMessage(wsPayload)
     } else {
       // SSE fallback - start in background
-      streamChatSSE({
+      const ssePayload = {
         taskId,
         messages: normalizedMessages,
         model: actualModel,
@@ -390,8 +444,18 @@ export const useLlm = () => {
         maxTokens,
         onChunk,
         onThinking,
-      }).catch(err => {
-        console.error('SSE stream error:', err)
+      }
+      
+      console.log('[useLlm] SSE payload:', {
+        taskId: ssePayload.taskId,
+        model: ssePayload.model,
+        messageCount: ssePayload.messages?.length,
+        systemPrompt: ssePayload.systemPrompt ? `"${ssePayload.systemPrompt.substring(0, 50)}..."` : null,
+        temperature: ssePayload.temperature,
+      })
+      
+      streamChatSSE(ssePayload).catch(err => {
+        console.error('[useLlm] SSE stream error:', err)
       })
     }
 
@@ -400,6 +464,7 @@ export const useLlm = () => {
 
   /**
    * Stream chat and return promise (convenience wrapper)
+   * Automatically chooses SSE or WebSocket based on streamMethod setting
    * @param {Array|string} messages - Messages or single message string
    * @param {string|null} systemPrompt - System prompt
    * @param {number|null} temperature - Temperature
@@ -407,14 +472,32 @@ export const useLlm = () => {
    * @returns {Promise<Object>}
    */
   const streamChat = async (messages, systemPrompt = null, temperature = null, onChunk = null) => {
-    const taskId = startChat({
-      messages,
-      systemPrompt,
-      temperature,
-      onChunk,
-    })
+    // Normalize messages
+    const normalizedMessages = typeof messages === 'string'
+      ? [{ role: 'user', content: messages }]
+      : messages
 
-    return waitForTask(taskId)
+    // Determine if we should use WebSocket or SSE
+    const useWebSocket = streamMethod.value === 'ws' && isConnected.value
+
+    if (useWebSocket) {
+      // WebSocket mode
+      const taskId = startChat({
+        messages: normalizedMessages,
+        systemPrompt,
+        temperature,
+        onChunk,
+      })
+      return waitForTask(taskId)
+    } else {
+      // SSE mode - call streamChatSSE directly (no task management needed)
+      return streamChatSSE({
+        messages: normalizedMessages,
+        systemPrompt,
+        temperature,
+        onChunk,
+      })
+    }
   }
 
   /**
