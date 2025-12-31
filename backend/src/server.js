@@ -46,7 +46,7 @@ const server = http.createServer(app);
 // Configuration with defaults
 const APP_NAME = process.env.APP_NAME || "TEMPLATE";
 const APP_VERSION = process.env.APP_VERSION || "0.0.1";
-const PORT = parseInt(process.env.PORT, 10) || 3000;
+const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "localhost";
 const NODE_ENV = process.env.NODE_ENV || "development";
 const isProduction = NODE_ENV === "production";
