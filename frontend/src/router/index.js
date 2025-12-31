@@ -15,7 +15,7 @@ const router = createRouter({
       path: '/auth',
       name: 'auth',
       component: () => import('../views/AuthView.vue'),
-      meta: { layout: 'blank' }
+      // meta: { layout: 'blank' }
     },
     {
       path: '/',
@@ -42,7 +42,7 @@ const router = createRouter({
       path: '/auth/reset',
       name: 'reset',
       component: () => import('../views/Reset.vue'),
-      meta: { layout: 'blank' }
+      // meta: { layout: 'blank' }
     },
     {
       path: '/:pathMatch(.*)*',

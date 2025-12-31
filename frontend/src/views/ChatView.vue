@@ -146,7 +146,7 @@
         <!-- Panel Settings (collapsible, only for multiple chats) -->
         <Transition name="slide-down">
           <div v-if="chatInstances.length > 1 && instance.showSettings" class="panel-settings">
-            <div class="setting-row">
+            <div class="setting-row setting-row-wide">
               <label>{{ $t('chat.systemPrompt') }}</label>
               <Textarea
                 v-model="instance.systemPrompt"
@@ -160,6 +160,18 @@
               <label>{{ $t('chat.temperature') }}: {{ instance.temperature.toFixed(1) }}</label>
               <Slider v-model="instance.temperature" :min="0" :max="1" :step="0.1" class="panel-temperature-slider" />
             </div>
+            <div class="setting-row">
+              <label>{{ $t('chat.maxTokens') }}</label>
+              <Select
+                v-model="instance.maxTokens"
+                :options="getMaxTokensOptions(instance.modelId)"
+                optionLabel="label"
+                optionValue="value"
+                :placeholder="$t('chat.selectMaxTokens')"
+                class="panel-max-tokens-select"
+                size="small"
+              />
+            </div>
           </div>
         </Transition>
         
@@ -171,6 +183,7 @@
           :initial-model-id="instance.modelId"
           :initial-system-prompt="instance.systemPrompt"
           :initial-temperature="instance.temperature"
+          :initial-max-tokens="instance.maxTokens"
           :show-header="chatInstances.length === 1"
           :force-websocket="chatInstances.length > 1"
           v-model="instance.messages"
@@ -229,6 +242,7 @@ const createInstance = (overrides = {}) => ({
   modelId: getDefaultModelId(),
   systemPrompt: '',
   temperature: 0.7,
+  maxTokens: null, // null = use model default
   shareHistory: false,
   showSettings: false,
   messages: [], // Messages now managed by parent
@@ -273,6 +287,31 @@ const gridClass = computed(() => {
   if (count <= 6) return 'grid-6'
   return 'grid-many'
 })
+
+// Generate max tokens options for a given model
+const getMaxTokensOptions = (modelId) => {
+  const model = models.value.find(m => m.id === modelId)
+  const modelMax = model?.maxOutputTokens || model?.maxTokens || 8192
+  const options = [{ label: t('chat.modelDefault'), value: null }]
+  
+  // Start at 1024 and double until we exceed modelMax
+  let value = 1024
+  while (value < modelMax) {
+    options.push({ 
+      label: value.toLocaleString(), 
+      value: value 
+    })
+    value *= 2
+  }
+  
+  // Always include the model's max as the final option
+  options.push({ 
+    label: `${modelMax.toLocaleString()} (max)`, 
+    value: modelMax 
+  })
+  
+  return options
+}
 
 const setChatRef = (el, index) => {
   if (el) chatRefs.value[index] = el
@@ -673,7 +712,7 @@ const sendToAll = async () => {
   background: var(--p-surface-50);
   border-bottom: 1px solid var(--p-surface-border);
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -681,6 +720,13 @@ const sendToAll = async () => {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.setting-row-wide {
+  flex: 2;
+  min-width: 200px;
 }
 
 .setting-row label {
@@ -695,6 +741,10 @@ const sendToAll = async () => {
 }
 
 .panel-temperature-slider {
+  width: 100%;
+}
+
+.panel-max-tokens-select {
   width: 100%;
 }
 

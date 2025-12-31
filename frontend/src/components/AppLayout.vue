@@ -11,7 +11,8 @@
          role="navigation"
          :aria-label="$t('accessibility.mainNavigation')">
       <!-- Left side: Hamburger and Logo -->
-      <div class="flex items-center gap-3">
+
+      <div class="go-home flex items-center gap-3" @click = "goHome">
         <!-- Hamburger Menu Button -->
         <Button
           icon="pi pi-bars"
@@ -24,7 +25,7 @@
           :aria-label="$t('accessibility.toggleMenu')"
           :title="$t('accessibility.toggleMenu')"
         />
-        <img src="@/assets/vue.svg" alt="Pronghorn Logo" class="h-10 w-10 drop-shadow-sm" />
+        <img src="@/assets/vue.svg" alt="Template Logo" class="h-10 w-10 drop-shadow-sm" />
         <span class="text-xl font-bold gradient-text hidden md:inline">
           {{ $t('common.appName') }}
         </span>
@@ -196,6 +197,7 @@ const languages = [
 
 // Sidebar navigation items with i18n
 const sidebarNavItems = computed(() => [
+  { label: t('nav.login'), icon: 'pi-sign-in', path: '/auth' },
   { label: t('nav.dashboard'), icon: 'pi-home', path: '/dashboard' },
   { label: t('nav.about'), icon: 'pi-info-circle', path: '/about' },
   { label: t('nav.chat'), icon: 'pi-comments', path: '/chat' },
@@ -257,9 +259,18 @@ const navigateTo = (path) => {
   sidebarVisible.value = false
   router.push(path)
 }
+
+const goHome = ()=>{
+  router.push('/')
+}
 </script>
 
 <style scoped>
+
+.go-home:hover {
+  cursor: pointer;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

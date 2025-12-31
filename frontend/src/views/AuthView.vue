@@ -9,7 +9,7 @@
 
       <!-- Logo Section -->
       <div class="text-center mb-8">
-        <img src="@/assets/vue.svg" alt="Pronghorn Logo" class="h-16 w-16 mx-auto mb-4" />
+        <img src="@/assets/vue.svg" alt="Template Logo" class="h-16 w-16 mx-auto mb-4" />
         <h1 class="text-3xl font-bold gradient-text">{{ $t('common.appName') }}</h1>
       </div>
 

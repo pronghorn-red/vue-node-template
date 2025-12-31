@@ -2,10 +2,13 @@
 <template>
   <div class="space-y-16">
     <!-- Hero Section -->
-    <section class="py-16 text-center animate-fade-in">
-      <img src="@/assets/vue.svg" alt="Vue logo" class="h-24 w-24 mx-auto mb-8 drop-shadow-lg" />
+    <section class="py-16 text-center animate-fade-in ">
+<div class="flex justify-center items-center gap-8 md:gap-12 lg:gap-16">
+    <img src="@/assets/vue.svg" alt="Vue logo" class="h-24 w-24 drop-shadow-lg" />
+    <img src="@/assets/node.svg" alt="Node.js logo" class="h-32 w-32 drop-shadow-lg" /> <!-- Slightly larger if desired -->
+  </div>
       <h1 class="text-5xl sm:text-6xl font-extrabold tracking-tight text-primary mb-4">
-        Project <span class="gradient-text">Pronghorn</span>
+        Vue/Node <span class="gradient-text">Template</span>
       </h1>
       <p class="mt-6 text-xl font-light text-secondary max-w-2xl mx-auto">
         The ultimate <span class="font-semibold text-primary">Vue 3 + Vite + Tailwind + PrimeVue</span> starter template for modern web applications

@@ -97,16 +97,27 @@
     <Transition name="slide-down">
       <div v-if="showHeader && showSettings" class="settings-panel">
         <div class="settings-content">
-          <div class="setting-item">
+          <div class="setting-item setting-item-wide">
             <label>{{ $t('chat.systemPrompt') }}</label>
             <Textarea v-model="systemPrompt" :placeholder="$t('chat.systemPromptPlaceholder')" :autoResize="true" rows="2" class="system-prompt-input" />
           </div>
           <div class="setting-item">
-            <label>{{ $t('chat.temperature') }}</label>
+            <label>{{ $t('chat.temperature') }}: {{ temperature.toFixed(1) }}</label>
             <div class="temperature-control">
               <Slider v-model="temperature" :min="0" :max="1" :step="0.1" class="temperature-slider" />
-              <span class="temperature-value">{{ temperature.toFixed(1) }}</span>
             </div>
+          </div>
+          <div class="setting-item">
+            <label>{{ $t('chat.maxTokens') }}</label>
+            <Select
+              v-model="maxTokens"
+              :options="maxTokensOptions"
+              optionLabel="label"
+              optionValue="value"
+              :placeholder="$t('chat.selectMaxTokens')"
+              class="max-tokens-select"
+              size="small"
+            />
           </div>
         </div>
       </div>
@@ -140,7 +151,7 @@
                 <i class="pi pi-sparkles"></i>
               </div>
               <div class="message-bubble assistant-bubble">
-                <div class="message-text markdown-content" v-html="renderMarkdown(msg.content)"></div>
+                <div class="message-text markdown-content" v-html="renderStreamingContent(msg.content, msg.isStreaming)"></div>
                 <div v-if="msg.isStreaming && !msg.content" class="typing-indicator">
                   <span></span><span></span><span></span>
                 </div>
@@ -229,6 +240,7 @@ const props = defineProps({
   initialModelId: { type: String, default: null },
   initialSystemPrompt: { type: String, default: '' },
   initialTemperature: { type: Number, default: 0.7 },
+  initialMaxTokens: { type: Number, default: null }, // null means use model default
   showHeader: { type: Boolean, default: true },
   forceWebsocket: { type: Boolean, default: false },
   // Controlled mode: parent manages messages
@@ -323,6 +335,7 @@ const appendToMessage = (index, content) => {
 const inputMessage = ref('')
 const systemPrompt = ref(props.initialSystemPrompt)
 const temperature = ref(props.initialTemperature)
+const maxTokens = ref(props.initialMaxTokens)
 const isStreaming = ref(false)
 const chatError = ref(null)
 const selectedModelId = ref(null)
@@ -334,12 +347,115 @@ const copiedIndex = ref(null)
 const userScrolled = ref(false)
 const currentTaskId = ref(null)
 
+// === PERFORMANCE OPTIMIZATION: Streaming buffer ===
+// Buffer chunks and flush periodically to reduce reactivity overhead
+const streamingBuffer = ref('')
+const streamingMessageIndex = ref(-1)
+let flushTimeout = null
+const FLUSH_INTERVAL = 50 // ms - flush buffer every 50ms
+
+const flushStreamingBuffer = (forceIndex = null) => {
+  // Use forceIndex if provided, otherwise use streamingMessageIndex
+  const targetIndex = forceIndex !== null ? forceIndex : streamingMessageIndex.value
+  
+  if (streamingBuffer.value && targetIndex >= 0) {
+    const bufferedContent = streamingBuffer.value
+    const idx = targetIndex
+    streamingBuffer.value = ''
+    
+    console.log('[Chat] Flushing buffer:', { 
+      contentLength: bufferedContent.length, 
+      targetIndex: idx,
+      preview: bufferedContent.substring(0, 50) 
+    })
+    
+    // Direct mutation for internal messages (much faster)
+    if (props.modelValue === null) {
+      if (internalMessages.value[idx]) {
+        internalMessages.value[idx].content += bufferedContent
+      }
+    } else {
+      // For controlled mode, batch the update
+      const newMessages = [...props.modelValue]
+      if (newMessages[idx]) {
+        newMessages[idx] = {
+          ...newMessages[idx],
+          content: newMessages[idx].content + bufferedContent
+        }
+        emit('update:modelValue', newMessages)
+      }
+    }
+  }
+}
+
+const scheduleFlush = () => {
+  if (!flushTimeout) {
+    flushTimeout = setTimeout(() => {
+      flushStreamingBuffer()
+      flushTimeout = null
+      // Schedule scroll after flush
+      requestAnimationFrame(() => {
+        if (!userScrolled.value && messagesContainer.value) {
+          messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+        }
+      })
+    }, FLUSH_INTERVAL)
+  }
+}
+
+// Optimized append that buffers chunks
+const appendToMessageBuffered = (index, content) => {
+  streamingMessageIndex.value = index
+  streamingBuffer.value += content
+  scheduleFlush()
+}
+
+// Force flush (call when streaming ends)
+const forceFlushBuffer = (messageIndex) => {
+  // Clear any pending timeout
+  if (flushTimeout) {
+    clearTimeout(flushTimeout)
+    flushTimeout = null
+  }
+  
+  // Flush with explicit index to avoid race conditions
+  flushStreamingBuffer(messageIndex)
+  
+  // Reset state
+  streamingMessageIndex.value = -1
+  streamingBuffer.value = ''
+}
+
 const streamMethodOptions = computed(() => [
   { label: t('chat.sse'), value: 'sse' },
   { label: t('chat.websocket'), value: 'ws' }
 ])
 
 const currentModel = computed(() => models.value.find(m => m.id === selectedModelId.value) || null)
+
+// Generate max tokens options based on current model's maxOutputTokens
+const maxTokensOptions = computed(() => {
+  const modelMax = currentModel.value?.maxOutputTokens || currentModel.value?.maxTokens || 8192
+  const options = [{ label: t('chat.modelDefault'), value: null }]
+  
+  // Start at 1024 and double until we exceed modelMax
+  let value = 1024
+  while (value < modelMax) {
+    options.push({ 
+      label: value.toLocaleString(), 
+      value: value 
+    })
+    value *= 2
+  }
+  
+  // Always include the model's max as the final option
+  options.push({ 
+    label: `${modelMax.toLocaleString()} (max)`, 
+    value: modelMax 
+  })
+  
+  return options
+})
 
 const groupedModels = computed(() => {
   return availableProviders.value.map(provider => ({
@@ -350,16 +466,59 @@ const groupedModels = computed(() => {
 
 const canSend = computed(() => inputMessage.value.trim() && currentModel.value?.available && !isStreaming.value)
 
+// === PERFORMANCE OPTIMIZATION: Memoized markdown rendering ===
+// Cache rendered markdown to avoid re-parsing on every reactivity trigger
+const markdownCache = new Map()
+const MAX_CACHE_SIZE = 100
+
 const renderMarkdown = (content) => {
   if (!content) return ''
+  
+  // For streaming messages, only render if content is substantial
+  // This prevents constant re-rendering during streaming
+  const cacheKey = content
+  
+  // Check cache first
+  if (markdownCache.has(cacheKey)) {
+    return markdownCache.get(cacheKey)
+  }
+  
   try {
-    return DOMPurify.sanitize(marked.parse(content), {
+    const rendered = DOMPurify.sanitize(marked.parse(content), {
       ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'del', 'sup', 'sub'],
       ALLOWED_ATTR: ['href', 'target', 'rel', 'class']
     })
+    
+    // Only cache non-streaming (complete) content to avoid memory bloat
+    // Cache management: remove oldest entries if cache is full
+    if (markdownCache.size >= MAX_CACHE_SIZE) {
+      const firstKey = markdownCache.keys().next().value
+      markdownCache.delete(firstKey)
+    }
+    markdownCache.set(cacheKey, rendered)
+    
+    return rendered
   } catch (err) {
     return content
   }
+}
+
+// For streaming content, use a simpler/faster rendering approach
+const renderStreamingContent = (content, isStreaming) => {
+  if (!content) return ''
+  
+  // During streaming, use simple text with line breaks (much faster)
+  if (isStreaming) {
+    // Simple escaping and line break handling - no full markdown parse
+    return content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>')
+  }
+  
+  // Once streaming is done, render full markdown
+  return renderMarkdown(content)
 }
 
 const handleScroll = () => {
@@ -554,11 +713,11 @@ const sendMessage = async (sharedContextOverride = null) => {
       model: selectedModelId.value,
       systemPrompt: effectiveSystemPrompt,
       temperature: temperature.value,
+      maxTokens: maxTokens.value,
       forceMethod,
       onChunk: (chunk) => {
-        // Use helper to append content (works in both controlled and standalone modes)
-        appendToMessage(assistantMessageIndex, chunk)
-        scrollToBottom()
+        // Use buffered append for performance (batches updates)
+        appendToMessageBuffered(assistantMessageIndex, chunk)
       }
     })
 
@@ -657,6 +816,15 @@ watch(temperature, (newVal) => {
   emit('settings-change', { temperature: newVal })
 })
 
+watch(maxTokens, (newVal) => {
+  emit('settings-change', { maxTokens: newVal })
+})
+
+// Watch for prop changes to maxTokens
+watch(() => props.initialMaxTokens, (newVal) => {
+  maxTokens.value = newVal
+}, { immediate: false })
+
 watch(models, () => {
   if (models.value.length > 0 && !selectedModelId.value) {
     const availableModel = models.value.find(m => m.available)
@@ -668,6 +836,13 @@ watch(streamMethod, (newVal) => { localStreamMethod.value = newVal })
 
 onUnmounted(() => {
   if (currentTaskId.value) cancel(currentTaskId.value)
+  // Clean up streaming buffer timeout
+  if (flushTimeout) {
+    clearTimeout(flushTimeout)
+    flushTimeout = null
+  }
+  // Clear markdown cache
+  markdownCache.clear()
 })
 </script>
 
@@ -779,13 +954,21 @@ onUnmounted(() => {
 
 .settings-content {
   display: flex;
-  gap: 2rem;
+  gap: 1.5rem;
   flex-wrap: wrap;
+  align-items: flex-start;
 }
 
 .setting-item {
   flex: 1;
-  min-width: 200px;
+  min-width: 150px;
+  max-width: 250px;
+}
+
+.setting-item-wide {
+  flex: 2;
+  min-width: 300px;
+  max-width: none;
 }
 
 .setting-item label {
@@ -795,6 +978,10 @@ onUnmounted(() => {
   text-transform: uppercase;
   color: var(--p-text-muted-color);
   margin-bottom: 0.5rem;
+}
+
+.max-tokens-select {
+  width: 100%;
 }
 
 .system-prompt-input {
