@@ -427,6 +427,7 @@ export const useLlm = () => {
         type: wsPayload.type,
         taskId: wsPayload.taskId,
         model: wsPayload.model,
+        messages: wsPayload.messages,
         messageCount: wsPayload.messages?.length,
         systemPrompt: wsPayload.systemPrompt ? `"${wsPayload.systemPrompt.substring(0, 50)}..."` : null,
         temperature: wsPayload.temperature,

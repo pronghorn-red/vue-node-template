@@ -32,6 +32,22 @@
         <!-- Chat Management -->
         <div class="chat-controls">
           <Button
+            v-tooltip.bottom="$t('chat.downloadAllChats')"
+            icon="pi pi-download"
+            severity="secondary"
+            text
+            @click="downloadAllChats"
+            :disabled="!hasAnyMessages"
+          />
+          <Button
+            v-tooltip.bottom="$t('chat.clearAllChats')"
+            icon="pi pi-trash"
+            severity="secondary"
+            text
+            @click="confirmClearAllChats"
+            :disabled="!hasAnyMessages"
+          />
+          <Button
             v-tooltip.bottom="$t('chat.addChat')"
             icon="pi pi-plus"
             severity="secondary"
@@ -51,16 +67,6 @@
         </div>
       </div>
     </header>
-
-    <!-- Floating add button for single chat mode -->
-    <Button
-      v-if="chatInstances.length === 1"
-      class="floating-add-btn"
-      icon="pi pi-plus"
-      rounded
-      v-tooltip.left="$t('chat.addChat')"
-      @click="addChat"
-    />
 
     <!-- Chat Grid - unified for both single and multi mode -->
     <div class="chat-grid" :class="gridClass">
@@ -98,6 +104,26 @@
             rounded
             size="small"
             @click="instance.showSettings = !instance.showSettings"
+          />
+          <Button
+            v-tooltip.bottom="$t('chat.downloadChat')"
+            icon="pi pi-download"
+            severity="secondary"
+            text
+            rounded
+            size="small"
+            :disabled="!chatRefs[index]?.messages?.length"
+            @click="downloadSingleChat(index)"
+          />
+          <Button
+            v-tooltip.bottom="$t('chat.clearChat')"
+            icon="pi pi-trash"
+            severity="secondary"
+            text
+            rounded
+            size="small"
+            :disabled="!chatRefs[index]?.messages?.length"
+            @click="clearSingleChat(index)"
           />
           <div class="panel-header-spacer"></div>
           <Checkbox
@@ -147,11 +173,22 @@
           :initial-temperature="instance.temperature"
           :show-header="chatInstances.length === 1"
           :force-websocket="chatInstances.length > 1"
+          :get-shared-history="() => getSharedHistoryForChat(index)"
           @model-change="(modelId) => instance.modelId = modelId"
           @settings-change="(settings) => updateInstanceSettings(index, settings)"
+          @add-chat="addChat"
         />
       </div>
     </div>
+
+    <!-- Clear All Confirmation Dialog -->
+    <Dialog v-model:visible="showClearAllDialog" :header="$t('chat.clearAllChatsConfirmTitle')" :modal="true" class="clear-dialog">
+      <p>{{ $t('chat.clearAllChatsConfirmMessage') }}</p>
+      <template #footer>
+        <Button :label="$t('common.cancel')" severity="secondary" text @click="showClearAllDialog = false" />
+        <Button :label="$t('chat.clearAllChats')" severity="danger" @click="clearAllChats" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -167,6 +204,7 @@ import InputText from 'primevue/inputtext'
 import Textarea from 'primevue/textarea'
 import Slider from 'primevue/slider'
 import Checkbox from 'primevue/checkbox'
+import Dialog from 'primevue/dialog'
 
 const { t } = useI18n()
 const { models, availableProviders, getModelsByProvider, initialize: initializeLlm } = useLlm()
@@ -258,13 +296,110 @@ const updateInstanceSettings = (index, settings) => {
   }
 }
 
-// Build shared history context for instances that have shareHistory enabled
+// Computed to check if any chat has messages
+const hasAnyMessages = computed(() => {
+  return chatRefs.value.some(ref => ref?.messages?.length > 0)
+})
+
+// Download a single chat's messages
+const downloadSingleChat = (index) => {
+  const chatRef = chatRefs.value[index]
+  if (!chatRef?.messages?.length) return
+  
+  const instance = chatInstances.value[index]
+  const name = instance.name || `Chat ${index + 1}`
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  
+  let content = `# ${name}\n\n`
+  content += `Exported: ${new Date().toLocaleString()}\n`
+  content += `Model: ${instance.modelId || 'Unknown'}\n\n---\n\n`
+  
+  chatRef.messages.forEach((msg, msgIndex) => {
+    const role = msg.role === 'user' ? 'You' : 'Assistant'
+    content += `## ${role}\n\n${msg.content}\n\n`
+    if (msgIndex < chatRef.messages.length - 1) content += `---\n\n`
+  })
+  
+  const blob = new Blob([content], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${name.replace(/\s+/g, '-').toLowerCase()}-${timestamp}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Clear a single chat's messages
+const clearSingleChat = (index) => {
+  const chatRef = chatRefs.value[index]
+  if (chatRef?.clearChat) {
+    chatRef.clearChat()
+  }
+}
+
+// Download all chats combined
+const downloadAllChats = () => {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  let content = `# All Chat Sessions\n\n`
+  content += `Exported: ${new Date().toLocaleString()}\n`
+  content += `Total Chats: ${chatInstances.value.length}\n\n`
+  
+  chatInstances.value.forEach((instance, index) => {
+    const chatRef = chatRefs.value[index]
+    const name = instance.name || `Chat ${index + 1}`
+    
+    content += `${'='.repeat(60)}\n`
+    content += `# ${name}\n`
+    content += `Model: ${instance.modelId || 'Unknown'}\n`
+    content += `${'='.repeat(60)}\n\n`
+    
+    if (chatRef?.messages?.length) {
+      chatRef.messages.forEach((msg, msgIndex) => {
+        const role = msg.role === 'user' ? 'You' : 'Assistant'
+        content += `## ${role}\n\n${msg.content}\n\n`
+        if (msgIndex < chatRef.messages.length - 1) content += `---\n\n`
+      })
+    } else {
+      content += `*No messages*\n\n`
+    }
+    
+    content += `\n`
+  })
+  
+  const blob = new Blob([content], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `all-chats-${timestamp}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Show clear all confirmation
+const showClearAllDialog = ref(false)
+
+const confirmClearAllChats = () => {
+  showClearAllDialog.value = true
+}
+
+// Clear all chats
+const clearAllChats = () => {
+  chatRefs.value.forEach(chatRef => {
+    if (chatRef?.clearChat) {
+      chatRef.clearChat()
+    }
+  })
+  showClearAllDialog.value = false
+}
+
+// Build shared history context from all OTHER chats for the chat at excludeIndex
+// This is called when the chat at excludeIndex has shareHistory enabled
 const buildSharedHistoryContext = (excludeIndex) => {
   const context = []
   
   chatInstances.value.forEach((instance, idx) => {
+    // Skip the chat that's requesting the history
     if (idx === excludeIndex) return
-    if (!instance.shareHistory) return
     
     const chatRef = chatRefs.value[idx]
     if (!chatRef?.messages?.length) return
@@ -281,6 +416,15 @@ const buildSharedHistoryContext = (excludeIndex) => {
   })
   
   return context
+}
+
+// Get shared history for a specific chat - checks if shareHistory is enabled at call time
+const getSharedHistoryForChat = (index) => {
+  const instance = chatInstances.value[index]
+  if (!instance?.shareHistory) {
+    return null
+  }
+  return buildSharedHistoryContext(index)
 }
 
 const sendToAll = async () => {
@@ -315,14 +459,6 @@ const sendToAll = async () => {
   height: calc(100vh - 64px);
   background: var(--p-surface-ground);
   position: relative;
-}
-
-/* Floating add button for single chat mode */
-.floating-add-btn {
-  position: absolute;
-  top: 0.75rem;
-  right: 1rem;
-  z-index: 10;
 }
 
 /* View Header (multi-chat) */

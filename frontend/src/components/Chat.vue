@@ -74,6 +74,13 @@
             size="small"
             @click="showSettings = !showSettings"
           />
+          <Button
+            v-tooltip.bottom="$t('chat.addChat')"
+            icon="pi pi-plus"
+            rounded
+            size="small"
+            @click="$emit('add-chat')"
+          />
         </div>
       </div>
     </header>
@@ -86,9 +93,9 @@
       </div>
     </Transition>
 
-    <!-- Settings Panel -->
+    <!-- Settings Panel (only shown in single chat mode when header is visible) -->
     <Transition name="slide-down">
-      <div v-if="showSettings" class="settings-panel">
+      <div v-if="showHeader && showSettings" class="settings-panel">
         <div class="settings-content">
           <div class="setting-item">
             <label>{{ $t('chat.systemPrompt') }}</label>
@@ -223,10 +230,11 @@ const props = defineProps({
   initialSystemPrompt: { type: String, default: '' },
   initialTemperature: { type: Number, default: 0.7 },
   showHeader: { type: Boolean, default: true },
-  forceWebsocket: { type: Boolean, default: false }
+  forceWebsocket: { type: Boolean, default: false },
+  getSharedHistory: { type: Function, default: null }
 })
 
-const emit = defineEmits(['model-change', 'settings-change'])
+const emit = defineEmits(['model-change', 'settings-change', 'add-chat'])
 
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -306,9 +314,17 @@ const handleScroll = () => {
 const scrollToBottom = async (force = false) => {
   await nextTick()
   if (!messagesContainer.value) return
-  if (!userScrolled.value || force) {
-    messagesContainer.value.scrollTo({ top: messagesContainer.value.scrollHeight, behavior: force ? 'smooth' : 'auto' })
-    userScrolled.value = false
+  
+  // Always scroll if forced, or if user hasn't manually scrolled up
+  if (force || !userScrolled.value) {
+    messagesContainer.value.scrollTo({ 
+      top: messagesContainer.value.scrollHeight, 
+      behavior: force ? 'smooth' : 'auto' 
+    })
+    // Reset userScrolled when we force scroll
+    if (force) {
+      userScrolled.value = false
+    }
   }
 }
 
@@ -382,7 +398,7 @@ const downloadChat = () => {
   URL.revokeObjectURL(url)
 }
 
-const sendMessage = async (sharedContext = null) => {
+const sendMessage = async (sharedContextOverride = null) => {
   if (!canSend.value) return
 
   const userMessage = inputMessage.value.trim()
@@ -390,11 +406,16 @@ const sendMessage = async (sharedContext = null) => {
   chatError.value = null
 
   messages.value.push({ role: 'user', content: userMessage })
+  
+  // Reset scroll state and force scroll to bottom when user sends
   userScrolled.value = false
-  await scrollToBottom()
+  await scrollToBottom(true)
 
   const assistantMessageIndex = messages.value.length
   messages.value.push({ role: 'assistant', content: '', isStreaming: true })
+
+  // Scroll again to show the streaming indicator
+  await scrollToBottom(true)
 
   isStreaming.value = true
 
@@ -404,19 +425,44 @@ const sendMessage = async (sharedContext = null) => {
       .filter(msg => !msg.isStreaming)
       .map(msg => ({ role: msg.role, content: msg.content }))
 
-    // If shared context provided, prepend it as system context
-    let effectiveSystemPrompt = systemPrompt.value || null
-    console.log('[Chat] sendMessage - systemPrompt:', { raw: systemPrompt.value, effective: effectiveSystemPrompt })
+    // Get shared context - either from override (sendExternalMessage) or from prop function
+
+    console.log("sharedContextOverride", sharedContextOverride)
+    console.log("props.getSharedHistory()", props.getSharedHistory())
+    let sharedContext = sharedContextOverride;
+    if (!sharedContext && props.getSharedHistory) {
+      sharedContext = props.getSharedHistory()
+      console.log('[Chat] Got shared history from prop function:', sharedContext?.length || 0, 'chats')
+    }
+
+    // If shared context provided, insert it as a user message BEFORE the last user message
     if (sharedContext && sharedContext.length > 0) {
       const contextStr = sharedContext.map(ctx => {
         const msgSummary = ctx.messages.map(m => `[${m.role}]: ${m.content}`).join('\n')
         return `=== ${ctx.name} ===\n${msgSummary}`
       }).join('\n\n')
       
-      effectiveSystemPrompt = effectiveSystemPrompt 
-        ? `${effectiveSystemPrompt}\n\n--- Shared Chat History ---\n${contextStr}`
-        : `--- Shared Chat History ---\n${contextStr}`
+      const sharedHistoryMessage = {
+        role: 'user',
+        content: `Here is some chat history from parallel chat sessions that I am having. I want you to consider this history in your answer, since it may be relevant. Treat these user messages like mine, and those assistant answers like responses from other assistants.\n\n${contextStr}`
+      }
+      
+      // Insert before the last message (which is the current user message)
+      if (messagesArray.length > 0) {
+        messagesArray.splice(messagesArray.length - 1, 0, sharedHistoryMessage)
+      } else {
+        messagesArray.unshift(sharedHistoryMessage)
+      }
+      
+      console.log('[Chat] Shared history injected:', { 
+        contextCount: sharedContext.length,
+        messagesArrayLength: messagesArray.length 
+      })
     }
+
+    // Use the systemPrompt directly (no longer mixing with shared history)
+    let effectiveSystemPrompt = systemPrompt.value || null
+    console.log('[Chat] sendMessage - systemPrompt:', { raw: systemPrompt.value, effective: effectiveSystemPrompt })
 
     // Determine which method to use
     // forceWebsocket prop forces WebSocket for multi-chat mode
