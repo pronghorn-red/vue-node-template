@@ -110,13 +110,11 @@
 
       <!-- Error Message -->
       <div v-if="error" class="error-message">
-        <i class="pi-exclamation-circle" />
         {{ error }}
       </div>
 
       <!-- Success Message -->
       <div v-if="success" class="success-message">
-        <i class="pi-check-circle" />
         {{ success }}
       </div>
 
@@ -127,13 +125,28 @@
 
       <!-- SSO Buttons -->
       <div class="sso-buttons">
-        <button @click="loginWithGoogle" :disabled="isLoading" class="btn-sso btn-google">
-          <img src="https://www.gstatic.com/firebaseapp/v8.10.1/images/firebaseui-icon-google.svg" alt="Google" />
+        <button 
+          type="button"
+          @click="loginWithGoogle" 
+          :disabled="isLoading || ssoLoading" 
+          class="btn-sso btn-google"
+        >
+          <img src="https://www.gstatic.com/firebaseui/image/social/google_icon_24x24.png" alt="Google" />
           {{ $t('auth.google') }}
         </button>
 
-        <button @click="loginWithMicrosoft" :disabled="isLoading" class="btn-sso btn-microsoft">
-          <img src="https://login.microsoftonline.com/common/federation/img/logo-ms-sm.png" alt="Microsoft" />
+        <button 
+          type="button"
+          @click="loginWithMicrosoft" 
+          :disabled="isLoading || ssoLoading" 
+          class="btn-sso btn-microsoft"
+        >
+          <svg class="microsoft-icon" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+            <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+            <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+            <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+            <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+          </svg>
           {{ $t('auth.microsoft') }}
         </button>
       </div>
@@ -142,18 +155,20 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { authApi } from '@/services/api'
+import { useAuth } from '@/composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
+const { signIn, signUp: authSignUp, signInWithSSO } = useAuth()
 
 // State
 const activeTab = ref('login')
 const isLoading = ref(false)
+const ssoLoading = ref(false)
 const error = ref(null)
 const success = ref(null)
 
@@ -167,6 +182,24 @@ const registerForm = ref({
   email: '',
   password: '',
   confirmPassword: ''
+})
+
+/**
+ * Check for error query params on mount (from failed OAuth)
+ */
+onMounted(() => {
+  const errorParam = route.query.error
+  if (errorParam) {
+    if (errorParam === 'microsoft_failed') {
+      error.value = t('auth.microsoftFailed') || 'Microsoft sign in failed. Please try again.'
+    } else if (errorParam === 'google_failed') {
+      error.value = t('auth.googleFailed') || 'Google sign in failed. Please try again.'
+    } else if (errorParam === 'session_expired') {
+      error.value = t('auth.sessionExpired') || 'Your session has expired. Please sign in again.'
+    }
+    // Clear error from URL
+    router.replace({ query: { ...route.query, error: undefined } })
+  }
 })
 
 /**
@@ -184,13 +217,9 @@ const handleLogin = async () => {
   isLoading.value = true
 
   try {
-    const response = await authApi.login(loginForm.value.email, loginForm.value.password)
+    const result = await signIn(loginForm.value.email, loginForm.value.password)
 
-    if (response.data.success) {
-      localStorage.setItem('accessToken', response.data.token)
-      localStorage.setItem('refreshToken', response.data.refreshToken)
-      localStorage.setItem('user', JSON.stringify(response.data.user))
-
+    if (result) {
       success.value = t('auth.loginSuccess')
 
       // Redirect after a short delay
@@ -198,6 +227,8 @@ const handleLogin = async () => {
         const redirect = route.query.redirect || '/dashboard'
         router.push(redirect)
       }, 500)
+    } else {
+      error.value = t('auth.loginFailed')
     }
   } catch (err) {
     error.value = err.response?.data?.error || t('auth.loginFailed')
@@ -236,23 +267,27 @@ const handleRegister = async () => {
   isLoading.value = true
 
   try {
-    const response = await authApi.register(
+    // Split display_name into first and last name for the API
+    const nameParts = registerForm.value.display_name.trim().split(' ')
+    const firstName = nameParts[0] || ''
+    const lastName = nameParts.slice(1).join(' ') || ''
+
+    const result = await authSignUp(
+      firstName,
+      lastName,
       registerForm.value.email,
-      registerForm.value.password,
-      registerForm.value.display_name
+      registerForm.value.password
     )
 
-    if (response.data.success) {
-      localStorage.setItem('accessToken', response.data.token)
-      localStorage.setItem('refreshToken', response.data.refreshToken)
-      localStorage.setItem('user', JSON.stringify(response.data.user))
-
+    if (result) {
       success.value = t('auth.registerSuccess')
 
       // Redirect after a short delay
       setTimeout(() => {
         router.push('/dashboard')
       }, 500)
+    } else {
+      error.value = t('auth.registerFailed')
     }
   } catch (err) {
     error.value = err.response?.data?.error || t('auth.registerFailed')
@@ -262,17 +297,25 @@ const handleRegister = async () => {
 }
 
 /**
- * Login with Google
+ * Login with Google SSO
+ * Redirects to backend OAuth endpoint
  */
 const loginWithGoogle = () => {
-  authApi.googleAuth()
+  ssoLoading.value = true
+  error.value = null
+  signInWithSSO('google')
+  // Page will redirect - ssoLoading will reset on page reload
 }
 
 /**
- * Login with Microsoft
+ * Login with Microsoft SSO
+ * Redirects to backend OAuth endpoint
  */
 const loginWithMicrosoft = () => {
-  authApi.microsoftAuth()
+  ssoLoading.value = true
+  error.value = null
+  signInWithSSO('microsoft')
+  // Page will redirect - ssoLoading will reset on page reload
 }
 </script>
 
@@ -500,6 +543,11 @@ const loginWithMicrosoft = () => {
 }
 
 .btn-sso img {
+  width: 20px;
+  height: 20px;
+}
+
+.btn-sso .microsoft-icon {
   width: 20px;
   height: 20px;
 }

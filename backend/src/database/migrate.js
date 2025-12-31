@@ -11,6 +11,12 @@ const { pool, query, closePool } = require('../config/database');
 const logger = require('../utils/logger');
 
 /**
+ * Valid role values for the role field
+ * Hierarchy: superadmin > admin > user
+ */
+const VALID_ROLES = ['superadmin', 'admin', 'user'];
+
+/**
  * Database schema migrations
  */
 const migrations = [
@@ -22,6 +28,7 @@ const migrations = [
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255),
         display_name VARCHAR(100) NOT NULL,
+        language_preference VARCHAR(10) DEFAULT 'en',
         oauth_provider VARCHAR(50) DEFAULT 'local',
         oauth_id VARCHAR(255),
         email_verified BOOLEAN DEFAULT false,
@@ -248,6 +255,274 @@ const migrations = [
       
       -- Usage: SELECT cleanup_old_websocket_connections(30);
     `
+  },
+  
+  // =========================================================================
+  // NEW MIGRATIONS FOR USER MANAGEMENT & ROLES
+  // =========================================================================
+  
+  {
+    name: 'add_user_profile_fields',
+    up: `
+      -- Add avatar_url for user profile pictures
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);
+      
+      -- Add additional_roles as JSONB array for supplementary permissions
+      -- Example: ["moderator", "billing", "beta_tester"]
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS additional_roles JSONB DEFAULT '[]'::jsonb;
+      
+      -- Create index for querying users by additional roles
+      CREATE INDEX IF NOT EXISTS idx_users_additional_roles 
+        ON users USING GIN (additional_roles);
+      
+      -- Create index for role queries
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+    `
+  },
+  {
+    name: 'add_user_blocking_fields',
+    up: `
+      -- Add fields for user account blocking
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT false;
+      
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+      
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS blocked_by UUID REFERENCES users(id);
+      
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
+      
+      -- Create index for blocked users
+      CREATE INDEX IF NOT EXISTS idx_users_blocked 
+        ON users(is_blocked) 
+        WHERE is_blocked = TRUE;
+    `
+  },
+  {
+    name: 'add_password_reset_fields',
+    up: `
+      -- Add fields for password reset functionality
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255);
+      
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ;
+      
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS reset_token_used BOOLEAN DEFAULT false;
+      
+      -- Track reset attempts to prevent abuse
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS reset_attempts INTEGER DEFAULT 0;
+      
+      ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS reset_attempts_reset_at TIMESTAMPTZ;
+      
+      -- Create index for finding valid reset tokens
+      CREATE INDEX IF NOT EXISTS idx_users_reset_token 
+        ON users(reset_token_expires) 
+        WHERE reset_token IS NOT NULL AND reset_token_used = false;
+    `
+  },
+  {
+    name: 'create_users_updated_at_trigger',
+    up: `
+      -- Auto-update updated_at timestamp on users table
+      CREATE OR REPLACE FUNCTION update_users_timestamp()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      
+      DROP TRIGGER IF EXISTS users_updated_at ON users;
+      CREATE TRIGGER users_updated_at
+        BEFORE UPDATE ON users
+        FOR EACH ROW
+        EXECUTE FUNCTION update_users_timestamp();
+    `
+  },
+  {
+    name: 'create_user_blocking_trigger',
+    up: `
+      -- Auto-set blocked_at when is_blocked changes to true
+      CREATE OR REPLACE FUNCTION set_user_blocked_at()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.is_blocked = TRUE AND (OLD.is_blocked IS NULL OR OLD.is_blocked = FALSE) THEN
+          NEW.blocked_at = NOW();
+        ELSIF NEW.is_blocked = FALSE THEN
+          NEW.blocked_at = NULL;
+          NEW.blocked_reason = NULL;
+          NEW.blocked_by = NULL;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      
+      DROP TRIGGER IF EXISTS user_blocked_at ON users;
+      CREATE TRIGGER user_blocked_at
+        BEFORE UPDATE ON users
+        FOR EACH ROW
+        EXECUTE FUNCTION set_user_blocked_at();
+    `
+  },
+  {
+    name: 'create_role_hierarchy_function',
+    up: `
+      -- Function to get role hierarchy level
+      -- Higher number = more permissions
+      CREATE OR REPLACE FUNCTION get_role_level(role_name VARCHAR)
+      RETURNS INTEGER AS $$
+      BEGIN
+        RETURN CASE role_name
+          WHEN 'superadmin' THEN 100
+          WHEN 'admin' THEN 50
+          WHEN 'user' THEN 10
+          ELSE 0
+        END;
+      END;
+      $$ LANGUAGE plpgsql IMMUTABLE;
+      
+      -- Function to check if a user can modify another user's role
+      -- Returns true if actor has higher role level than target
+      CREATE OR REPLACE FUNCTION can_modify_user_role(
+        actor_role VARCHAR, 
+        target_current_role VARCHAR,
+        target_new_role VARCHAR DEFAULT NULL
+      )
+      RETURNS BOOLEAN AS $$
+      DECLARE
+        actor_level INTEGER;
+        target_level INTEGER;
+        new_role_level INTEGER;
+      BEGIN
+        actor_level := get_role_level(actor_role);
+        target_level := get_role_level(target_current_role);
+        
+        -- Actor must have higher level than target's current role
+        IF actor_level <= target_level THEN
+          RETURN FALSE;
+        END IF;
+        
+        -- If setting a new role, actor must have higher level than the new role too
+        IF target_new_role IS NOT NULL THEN
+          new_role_level := get_role_level(target_new_role);
+          IF actor_level <= new_role_level THEN
+            RETURN FALSE;
+          END IF;
+        END IF;
+        
+        RETURN TRUE;
+      END;
+      $$ LANGUAGE plpgsql IMMUTABLE;
+      
+      -- Function to check if a role value is valid
+      CREATE OR REPLACE FUNCTION is_valid_role(role_name VARCHAR)
+      RETURNS BOOLEAN AS $$
+      BEGIN
+        RETURN role_name IN ('superadmin', 'admin', 'user');
+      END;
+      $$ LANGUAGE plpgsql IMMUTABLE;
+    `
+  },
+  {
+    name: 'create_password_reset_requests_table',
+    up: `
+      -- Table to track password reset requests for admin visibility
+      CREATE TABLE IF NOT EXISTS password_reset_requests (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reset_token_hash VARCHAR(255) NOT NULL,
+        requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ,
+        ip_address INET,
+        user_agent TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_reset_requests_user 
+        ON password_reset_requests(user_id);
+      
+      CREATE INDEX IF NOT EXISTS idx_reset_requests_expires 
+        ON password_reset_requests(expires_at)
+        WHERE used_at IS NULL;
+      
+      -- View for admin to see pending reset requests
+      CREATE OR REPLACE VIEW pending_password_resets AS
+      SELECT 
+        prr.id,
+        prr.user_id,
+        u.email,
+        u.display_name,
+        prr.requested_at,
+        prr.expires_at,
+        prr.ip_address,
+        CASE 
+          WHEN prr.expires_at < NOW() THEN 'expired'
+          ELSE 'pending'
+        END AS status
+      FROM password_reset_requests prr
+      JOIN users u ON prr.user_id = u.id
+      WHERE prr.used_at IS NULL
+      ORDER BY prr.requested_at DESC;
+    `
+  },
+  {
+    name: 'create_user_audit_log_table',
+    up: `
+      -- Audit log for tracking important user-related actions
+      CREATE TABLE IF NOT EXISTS user_audit_log (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        action VARCHAR(100) NOT NULL,
+        details JSONB DEFAULT '{}',
+        ip_address INET,
+        user_agent TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_audit_log_user 
+        ON user_audit_log(user_id);
+      
+      CREATE INDEX IF NOT EXISTS idx_audit_log_actor 
+        ON user_audit_log(actor_id);
+      
+      CREATE INDEX IF NOT EXISTS idx_audit_log_action 
+        ON user_audit_log(action);
+      
+      CREATE INDEX IF NOT EXISTS idx_audit_log_created 
+        ON user_audit_log(created_at);
+      
+      -- Function to log user actions
+      CREATE OR REPLACE FUNCTION log_user_action(
+        p_user_id UUID,
+        p_actor_id UUID,
+        p_action VARCHAR,
+        p_details JSONB DEFAULT '{}',
+        p_ip_address INET DEFAULT NULL,
+        p_user_agent TEXT DEFAULT NULL
+      )
+      RETURNS UUID AS $$
+      DECLARE
+        log_id UUID;
+      BEGIN
+        INSERT INTO user_audit_log (user_id, actor_id, action, details, ip_address, user_agent)
+        VALUES (p_user_id, p_actor_id, p_action, p_details, p_ip_address, p_user_agent)
+        RETURNING id INTO log_id;
+        
+        RETURN log_id;
+      END;
+      $$ LANGUAGE plpgsql;
+    `
   }
 ];
 
@@ -346,4 +621,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { runMigrations, getMigrationStatus, migrations };
+module.exports = { runMigrations, getMigrationStatus, migrations, VALID_ROLES };

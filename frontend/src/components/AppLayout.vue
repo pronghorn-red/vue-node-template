@@ -11,8 +11,7 @@
          role="navigation"
          :aria-label="$t('accessibility.mainNavigation')">
       <!-- Left side: Hamburger and Logo -->
-
-      <div class="go-home flex items-center gap-3" @click = "goHome">
+      <div class="go-home flex items-center gap-3" @click="goHome">
         <!-- Hamburger Menu Button -->
         <Button
           icon="pi pi-bars"
@@ -20,7 +19,7 @@
           rounded
           severity="secondary"
           size="small"
-          @click="sidebarVisible = true"
+          @click.stop="sidebarVisible = true"
           class="focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
           :aria-label="$t('accessibility.toggleMenu')"
           :title="$t('accessibility.toggleMenu')"
@@ -69,19 +68,123 @@
             :title="isDark ? $t('common.lightMode') : $t('common.darkMode')"
           />
 
-          <!-- User Menu -->
-          <Button
-            v-if="isLoggedIn"
-            :icon="userMenuIcon"
-            rounded
-            text
-            severity="secondary"
-            @click="toggleUserMenu"
-            class="focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
-            :aria-label="$t('common.profile')"
-            :aria-haspopup="true"
-            :aria-expanded="userMenuVisible"
-          />
+          <!-- User Menu Button (Logged In) -->
+          <div v-if="isLoggedIn" class="relative">
+            <button
+              @click="toggleUserMenu"
+              class="flex items-center gap-2 px-2 py-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+              :aria-label="$t('common.profile')"
+              :aria-haspopup="true"
+              :aria-expanded="userMenuVisible"
+            >
+              <!-- User Avatar -->
+              <div class="relative">
+                <img 
+                  v-if="user?.avatar_url"
+                  :src="user.avatar_url" 
+                  :alt="user.display_name"
+                  class="w-8 h-8 rounded-full object-cover ring-2 ring-white dark:ring-slate-800"
+                />
+                <div 
+                  v-else
+                  class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold ring-2 ring-white dark:ring-slate-800"
+                >
+                  {{ userInitials }}
+                </div>
+                <!-- Online indicator -->
+                <span class="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-slate-900 rounded-full"></span>
+              </div>
+              
+              <!-- User Info (hidden on mobile) -->
+              <div class="hidden md:flex flex-col items-start">
+                <span class="text-sm font-medium text-gray-900 dark:text-white leading-tight">
+                  {{ user?.display_name || 'User' }}
+                </span>
+                <div class="flex items-center gap-1">
+                  <!-- Role Badge -->
+                  <span :class="['text-xs px-1.5 py-0.5 rounded-full font-medium leading-none', roleColorClass]">
+                    {{ roleLabel }}
+                  </span>
+                  <!-- Additional roles count -->
+                  <span 
+                    v-if="additionalRolesCount > 0"
+                    class="text-xs text-gray-500 dark:text-gray-400"
+                    :title="additionalRolesTitle"
+                  >
+                    +{{ additionalRolesCount }}
+                  </span>
+                </div>
+              </div>
+              
+              <!-- Dropdown Arrow -->
+              <i class="pi pi-chevron-down text-xs text-gray-500 dark:text-gray-400 hidden md:block"></i>
+            </button>
+
+            <!-- Custom Dropdown Menu -->
+            <div 
+              v-if="userMenuVisible"
+              ref="dropdownMenu"
+              class="absolute right-0 top-full mt-2 w-64 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-gray-200 dark:border-slate-700 py-2 z-50"
+            >
+              <!-- User Info Header -->
+              <div class="px-4 py-3 border-b border-gray-200 dark:border-slate-700">
+                <div class="font-medium text-gray-900 dark:text-white truncate">
+                  {{ user?.display_name }}
+                </div>
+                <div class="text-sm text-gray-500 dark:text-gray-400 truncate">
+                  {{ user?.email }}
+                </div>
+                <div class="flex items-center gap-1 mt-1">
+                  <span :class="['text-xs px-1.5 py-0.5 rounded-full font-medium', roleColorClass]">
+                    {{ roleLabel }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Menu Items -->
+              <div class="py-1">
+                <button
+                  @click="navigateFromMenu('/profile')"
+                  class="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center gap-3"
+                >
+                  <i class="pi pi-user"></i>
+                  {{ $t('common.profile', 'Profile') }}
+                </button>
+                <button
+                  @click="navigateFromMenu('/settings')"
+                  class="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center gap-3"
+                >
+                  <i class="pi pi-cog"></i>
+                  {{ $t('common.settings', 'Settings') }}
+                </button>
+              </div>
+
+              <!-- Admin Section -->
+              <div v-if="isAdmin" class="border-t border-gray-200 dark:border-slate-700 py-1">
+                <button
+                  @click="navigateFromMenu('/users')"
+                  class="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center gap-3"
+                >
+                  <i class="pi pi-users"></i>
+                  {{ $t('nav.users', 'User Management') }}
+                  <span class="ml-auto text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                    Admin
+                  </span>
+                </button>
+              </div>
+
+              <!-- Logout -->
+              <div class="border-t border-gray-200 dark:border-slate-700 py-1">
+                <button
+                  @click="handleSignOut"
+                  class="w-full px-4 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-3"
+                >
+                  <i class="pi pi-sign-out"></i>
+                  {{ $t('common.logout', 'Sign Out') }}
+                </button>
+              </div>
+            </div>
+          </div>
 
           <!-- Sign In Button - Icon on mobile, text on desktop -->
           <template v-else>
@@ -106,15 +209,6 @@
             />
           </template>
         </div>
-
-        <!-- User Dropdown Menu -->
-        <Menu
-          v-if="isLoggedIn"
-          ref="userMenu"
-          :model="userMenuItems"
-          :popup="true"
-          class="w-48"
-        />
       </div>
     </div>
 
@@ -137,24 +231,79 @@
             <h2 class="m-0 text-lg font-semibold text-primary">{{ $t('common.menu') }}</h2>
           </div>
         </template>
+        
+        <!-- User Card in Sidebar (when logged in) -->
+        <div v-if="isLoggedIn" class="p-4 border-b border-gray-200 dark:border-slate-700">
+          <div class="flex items-center gap-3">
+            <div class="relative">
+              <img 
+                v-if="user?.avatar_url"
+                :src="user.avatar_url" 
+                :alt="user.display_name"
+                class="w-12 h-12 rounded-full object-cover"
+              />
+              <div 
+                v-else
+                class="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-lg font-bold"
+              >
+                {{ userInitials }}
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="font-medium text-gray-900 dark:text-white truncate">
+                {{ user?.display_name }}
+              </div>
+              <div class="text-sm text-gray-500 dark:text-gray-400 truncate">
+                {{ user?.email }}
+              </div>
+              <div class="flex items-center gap-1 mt-1">
+                <span :class="['text-xs px-1.5 py-0.5 rounded-full font-medium', roleColorClass]">
+                  {{ roleLabel }}
+                </span>
+                <span 
+                  v-if="additionalRolesCount > 0"
+                  class="text-xs text-gray-500 dark:text-gray-400"
+                >
+                  +{{ additionalRolesCount }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Navigation list with proper keyboard navigation -->
-        <nav class="p-4 space-y-2">
+        <nav class="p-4 space-y-1">
           <button
             v-for="item in sidebarNavItems"
-            :key="item.label"
+            :key="item.path"
             @click="navigateTo(item.path)"
-            class="w-full text-left px-4 py-2 rounded-lg text-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 transition-colors flex items-center gap-2"
+            class="w-full text-left px-4 py-2.5 rounded-lg text-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 transition-colors flex items-center gap-3"
+            :class="{ 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400': isActiveRoute(item.path) }"
             :aria-label="item.label"
+            :aria-current="isActiveRoute(item.path) ? 'page' : undefined"
           >
-            <i :class="`pi ${item.icon}`"></i>
+            <i :class="`pi ${item.icon} text-lg`"></i>
             <span>{{ item.label }}</span>
+            <!-- Admin badge -->
+            <span 
+              v-if="item.adminOnly"
+              class="ml-auto text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300"
+            >
+              Admin
+            </span>
           </button>
         </nav>
+
+        <!-- Sidebar Footer -->
+        <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200 dark:border-slate-700">
+          <div class="text-xs text-gray-500 dark:text-gray-400 text-center">
+            {{ $t('common.appName') }} v1.0.0
+          </div>
+        </div>
       </Drawer>
 
       <!-- Main Content Area -->
       <main class="flex-1 overflow-auto bg-primary" id="main-content" role="main" :aria-label="$t('accessibility.mainContent')">
-
         <div class="p-2 lg:p-2">
           <slot />
         </div>
@@ -169,13 +318,13 @@ import { useDarkMode } from '@/composables/useDarkMode.js'
 import { useAuth } from '@/composables/useAuth'
 import { useWebSocket } from '@/composables/useWebSocket'
 import Drawer from 'primevue/drawer'
-import Menu from 'primevue/menu'
 import Button from 'primevue/button'
 
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 const router = useRouter()
+const route = useRoute()
 const { user, isLoggedIn, signOut } = useAuth()
 const { isConnected: wsConnected } = useWebSocket()
 const { locale } = useI18n()
@@ -185,53 +334,106 @@ const { t } = useI18n()
 const sidebarVisible = ref(false)
 const isMobile = ref(false)
 const userMenuVisible = ref(false)
-const userMenu = ref(null)
+const dropdownMenu = ref(null)
 const currentLanguage = ref(locale.value)
 
-const userMenuIcon = computed(() => user.value?.avatar ? 'pi pi-user' : 'pi pi-user-circle')
+// Role configuration
+const ROLE_COLORS = {
+  superadmin: 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300',
+  admin: 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300',
+  user: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+}
 
-const languages = [
-  { label: 'English', code: 'en' },
-  { label: 'Français', code: 'fr' }
-]
+const ROLE_LABELS = {
+  superadmin: 'Super Admin',
+  admin: 'Admin',
+  user: 'User'
+}
+
+// Computed properties
+const userInitials = computed(() => {
+  if (!user.value?.display_name) return '?'
+  const parts = user.value.display_name.trim().split(' ')
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  }
+  return parts[0].substring(0, 2).toUpperCase()
+})
+
+const roleColorClass = computed(() => {
+  return ROLE_COLORS[user.value?.role] || ROLE_COLORS.user
+})
+
+const roleLabel = computed(() => {
+  return ROLE_LABELS[user.value?.role] || 'User'
+})
+
+const additionalRolesCount = computed(() => {
+  return user.value?.additional_roles?.length || 0
+})
+
+const additionalRolesTitle = computed(() => {
+  if (!user.value?.additional_roles?.length) return ''
+  return user.value.additional_roles.join(', ')
+})
+
+const isAdmin = computed(() => {
+  return ['admin', 'superadmin'].includes(user.value?.role)
+})
 
 // Sidebar navigation items with i18n
-const sidebarNavItems = computed(() => [
-  { label: t('nav.login'), icon: 'pi-sign-in', path: '/auth' },
-  { label: t('nav.dashboard'), icon: 'pi-home', path: '/dashboard' },
-  { label: t('nav.about'), icon: 'pi-info-circle', path: '/about' },
-  { label: t('nav.chat'), icon: 'pi-comments', path: '/chat' },
-])
+const sidebarNavItems = computed(() => {
+  const items = [
+    { label: t('nav.dashboard'), icon: 'pi-home', path: '/dashboard' },
+    { label: t('nav.chat'), icon: 'pi-comments', path: '/chat' },
+    { label: t('nav.about'), icon: 'pi-info-circle', path: '/about' },
+  ]
+  
+  // Add admin items
+  if (isAdmin.value) {
+    items.push(
+      { label: t('nav.users', 'User Management'), icon: 'pi-users', path: '/users', adminOnly: true }
+    )
+  }
+  
+  // Add login if not logged in
+  if (!isLoggedIn.value) {
+    items.unshift({ label: t('nav.login'), icon: 'pi-sign-in', path: '/auth' })
+  }
+  
+  return items
+})
 
 // Check if mobile on mount and on resize
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 1024
 }
 
+// Close dropdown when clicking outside
+const handleClickOutside = (event) => {
+  if (userMenuVisible.value && dropdownMenu.value && !dropdownMenu.value.contains(event.target)) {
+    const button = event.target.closest('button')
+    if (!button || !button.getAttribute('aria-haspopup')) {
+      userMenuVisible.value = false
+    }
+  }
+}
+
 onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
+  document.addEventListener('click', handleClickOutside)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
+  document.removeEventListener('click', handleClickOutside)
 })
 
-// Top menu items with i18n
-const topMenuItems = computed(() => [
-  { label: t('nav.dashboard'), icon: 'pi pi-home', command: () => router.push('/dashboard') },
-  { label: t('nav.about'), icon: 'pi pi-info-circle', command: () => router.push('/about') },
-  { label: t('nav.documentation'), icon: 'pi pi-book', url: 'https://primevue.org', target: '_blank' }
-])
-
-const userMenuItems = computed(() => [
-  { label: user.value?.email || 'User', icon: 'pi pi-envelope', disabled: true },
-  { separator: true },
-  { label: t('common.profile'), icon: 'pi pi-cog', command: () => router.push('/profile') },
-  { label: t('common.settings'), icon: 'pi pi-sliders-v', command: () => router.push('/settings') },
-  { separator: true },
-  { label: t('common.logout'), icon: 'pi pi-sign-out', command: handleSignOut }
-])
+// Check if route is active
+const isActiveRoute = (path) => {
+  return route.path === path || route.path.startsWith(path + '/')
+}
 
 const toggleLanguage = () => {
   const newLanguage = currentLanguage.value === 'en' ? 'fr' : 'en'
@@ -241,12 +443,17 @@ const toggleLanguage = () => {
 }
 
 const toggleUserMenu = (event) => {
-  if (userMenu.value) {
-    userMenu.value.toggle(event)
-  }
+  event.stopPropagation()
+  userMenuVisible.value = !userMenuVisible.value
+}
+
+const navigateFromMenu = (path) => {
+  userMenuVisible.value = false
+  router.push(path)
 }
 
 const handleSignOut = () => {
+  userMenuVisible.value = false
   signOut()
   router.push('/auth')
 }
@@ -260,13 +467,12 @@ const navigateTo = (path) => {
   router.push(path)
 }
 
-const goHome = ()=>{
+const goHome = () => {
   router.push('/')
 }
 </script>
 
 <style scoped>
-
 .go-home:hover {
   cursor: pointer;
 }
@@ -332,19 +538,15 @@ const goHome = ()=>{
   }
 }
 
-:deep(.p-menubar) {
-  background: var(--p-surface-0);
-  border-color: var(--p-surface-border);
+/* Gradient text for app name */
+.gradient-text {
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-:deep(.p-menubar .p-menubar-root-list > .p-menuitem > .p-menuitem-content) {
-  color: var(--text-color);
-}
-
-:deep(.p-menubar .p-menubar-root-list > .p-menuitem > .p-menuitem-content:hover) {
-  background-color: var(--p-surface-100);
-}
-
+/* Drawer styling */
 :deep(.p-drawer) {
   background: var(--p-surface-0);
 }
@@ -352,18 +554,5 @@ const goHome = ()=>{
 :deep(.p-drawer .p-drawer-header) {
   background: var(--p-surface-100);
   border-color: var(--p-surface-border);
-}
-
-:deep(.p-menu) {
-  background: transparent;
-  border: none;
-}
-
-:deep(.p-menu .p-menuitem-content) {
-  color: var(--text-color);
-}
-
-:deep(.p-menu .p-menuitem-content:hover) {
-  background-color: var(--p-surface-100);
 }
 </style>

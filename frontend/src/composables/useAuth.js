@@ -1,88 +1,255 @@
 /**
  * @fileoverview useAuth Composable
  * @description Authentication composable with JWT token management.
- * Stores tokens in localStorage for WebSocket authentication.
+ * 
+ * Token Storage Strategy:
+ * - Access token: Stored in sessionStorage (accessible to JS for Authorization header)
+ * - Refresh token: httpOnly cookie ONLY (not accessible to JS, handled by browser)
+ * 
+ * Session Recovery:
+ * - On app startup, if sessionStorage is empty but httpOnly cookie exists,
+ *   we can recover the session by calling /auth/refresh
+ * - This allows users to return to the app after closing browser
+ * 
+ * WebSocket Integration:
+ * - Provides token refresh callback to useWebSocket
+ * - WebSocket can trigger token refresh on auth errors
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import api from '@/services/api'
 
-// Global auth state (singleton)
+// ============================================================================
+// SINGLETON STATE
+// ============================================================================
+
 const user = ref(null)
 const token = ref(null)
-const refreshToken = ref(null)
 const isAuthenticated = ref(false)
 const loading = ref(false)
 const error = ref(null)
+const isInitialized = ref(false)
+const isRecoveringSession = ref(false)
 
-// Storage keys
+// Storage keys (sessionStorage only - refresh token is in httpOnly cookie)
 const STORAGE_KEYS = {
   user: 'user',
   accessToken: 'accessToken',
-  refreshToken: 'refreshToken',
 }
 
+// API base URL for OAuth redirects
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+
+// WebSocket reference (set via setWebSocketRef)
+let webSocketRef = null
+
+// ============================================================================
+// INTERNAL HELPERS
+// ============================================================================
+
 /**
- * Initialize auth from localStorage
+ * Initialize auth state from sessionStorage
+ * Called once when the module loads
  */
-const initializeAuth = () => {
+const initializeFromStorage = () => {
   try {
-    const savedUser = localStorage.getItem(STORAGE_KEYS.user)
-    const savedToken = localStorage.getItem(STORAGE_KEYS.accessToken)
-    const savedRefreshToken = localStorage.getItem(STORAGE_KEYS.refreshToken)
+    const savedUser = sessionStorage.getItem(STORAGE_KEYS.user)
+    const savedToken = sessionStorage.getItem(STORAGE_KEYS.accessToken)
     
     if (savedUser && savedToken) {
       user.value = JSON.parse(savedUser)
       token.value = savedToken
-      refreshToken.value = savedRefreshToken
       isAuthenticated.value = true
       
       // Set token in API defaults
       api.defaults.headers.common['Authorization'] = `Bearer ${savedToken}`
+      return true
     }
+    return false
   } catch (err) {
-    console.error('Failed to initialize auth:', err)
+    console.error('Failed to initialize auth from storage:', err)
     clearAuth()
+    return false
   }
 }
 
 /**
- * Save auth state to localStorage
+ * Save auth state after successful authentication
+ * @param {Object} userData - User object from server
+ * @param {string} accessToken - JWT access token
  */
-const saveAuth = (userData, accessToken, refresh = null) => {
+const saveAuth = (userData, accessToken) => {
   user.value = userData
   token.value = accessToken
-  refreshToken.value = refresh
   isAuthenticated.value = true
   
-  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData))
-  localStorage.setItem(STORAGE_KEYS.accessToken, accessToken)
-  if (refresh) {
-    localStorage.setItem(STORAGE_KEYS.refreshToken, refresh)
-  }
+  // Store in sessionStorage
+  sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData))
+  sessionStorage.setItem(STORAGE_KEYS.accessToken, accessToken)
   
   // Set token in API defaults
   api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`
+  
+  // Update WebSocket if connected
+  notifyWebSocket()
 }
 
 /**
- * Clear auth state
+ * Clear all auth state (logout)
  */
 const clearAuth = () => {
   user.value = null
   token.value = null
-  refreshToken.value = null
   isAuthenticated.value = false
   
-  localStorage.removeItem(STORAGE_KEYS.user)
-  localStorage.removeItem(STORAGE_KEYS.accessToken)
-  localStorage.removeItem(STORAGE_KEYS.refreshToken)
+  // Clear sessionStorage
+  sessionStorage.removeItem(STORAGE_KEYS.user)
+  sessionStorage.removeItem(STORAGE_KEYS.accessToken)
   
+  // Remove Authorization header
   delete api.defaults.headers.common['Authorization']
 }
 
-// Initialize on first import
-initializeAuth()
+/**
+ * Decode JWT payload without verification
+ * @param {string} tokenStr - JWT token
+ * @returns {Object|null} Decoded payload or null
+ */
+const decodeToken = (tokenStr) => {
+  try {
+    const payload = tokenStr.split('.')[1]
+    return JSON.parse(atob(payload))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Notify WebSocket of auth state change
+ */
+const notifyWebSocket = () => {
+  // WebSocket will pick up new token from sessionStorage on next connect/auth
+  // If we have a direct reference, we could trigger re-auth here
+  if (webSocketRef?.value?.isConnected && token.value) {
+    try {
+      webSocketRef.value.authenticate(token.value)
+    } catch (e) {
+      console.debug('WebSocket re-auth skipped:', e.message)
+    }
+  }
+}
+
+/**
+ * Fetch full user profile from /auth/me
+ * This ensures we have all user fields including role
+ * @returns {Promise<Object|null>} Full user object
+ */
+const fetchFullUserProfile = async () => {
+  try {
+    const response = await api.get('/auth/me')
+    const userData = response.data.user
+    
+    // Update stored user with full profile
+    user.value = userData
+    sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData))
+    
+    return userData
+  } catch (err) {
+    console.error('Failed to fetch full user profile:', err)
+    return null
+  }
+}
+
+// ============================================================================
+// SESSION RECOVERY
+// ============================================================================
+
+/**
+ * Attempt to recover session using httpOnly refresh token cookie
+ * Called on app startup if sessionStorage is empty
+ * 
+ * @returns {Promise<boolean>} True if session was recovered
+ */
+const recoverSession = async () => {
+  // Don't try if already authenticated or already recovering
+  if (isAuthenticated.value || isRecoveringSession.value) {
+    return isAuthenticated.value
+  }
+  
+  isRecoveringSession.value = true
+  
+  try {
+    // Try to refresh using httpOnly cookie
+    // Browser automatically sends the cookie with withCredentials: true
+    const refreshResponse = await api.post('/auth/refresh', {}, {
+      withCredentials: true,
+      // Don't trigger the interceptor's refresh logic
+      _skipAuthRetry: true
+    })
+    
+    const { token: newToken } = refreshResponse.data
+    
+    if (!newToken) {
+      return false
+    }
+    
+    // Temporarily set token to fetch user info
+    api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
+    
+    // Fetch full user info from /auth/me (includes role)
+    const userResponse = await api.get('/auth/me')
+    const userData = userResponse.data.user
+    
+    // Save auth state
+    saveAuth(userData, newToken)
+    
+    console.log('✅ Session recovered from cookie')
+    return true
+    
+  } catch (err) {
+    // Session recovery failed - user needs to log in
+    // This is expected if the refresh token has expired
+    console.debug('Session recovery failed:', err.message)
+    return false
+  } finally {
+    isRecoveringSession.value = false
+  }
+}
+
+/**
+ * Initialize auth - checks storage first, then attempts session recovery
+ * @returns {Promise<boolean>} True if user is authenticated
+ */
+const initializeAuth = async () => {
+  if (isInitialized.value) {
+    return isAuthenticated.value
+  }
+  
+  // First, try to load from sessionStorage
+  const hasStoredAuth = initializeFromStorage()
+  
+  if (hasStoredAuth) {
+    isInitialized.value = true
+    
+    // If we have stored auth but user doesn't have role, fetch fresh profile
+    if (!user.value?.role) {
+      console.log('User role missing, fetching fresh profile...')
+      await fetchFullUserProfile()
+    }
+    
+    return true
+  }
+  
+  // No stored auth - try to recover from httpOnly cookie
+  const recovered = await recoverSession()
+  
+  isInitialized.value = true
+  return recovered
+}
+
+// ============================================================================
+// COMPOSABLE EXPORT
+// ============================================================================
 
 export function useAuth() {
   const isLoggedIn = computed(() => isAuthenticated.value)
@@ -91,7 +258,7 @@ export function useAuth() {
    * Sign in with email and password
    * @param {string} email
    * @param {string} password
-   * @returns {Promise<boolean>}
+   * @returns {Promise<boolean>} Success status
    */
   const signIn = async (email, password) => {
     loading.value = true
@@ -99,9 +266,24 @@ export function useAuth() {
     
     try {
       const response = await api.post('/auth/login', { email, password })
-      const { user: userData, token: accessToken, refreshToken: refresh } = response.data
+      const { user: userData, token: accessToken } = response.data
       
-      saveAuth(userData, accessToken, refresh)
+      // Set token first so we can make authenticated requests
+      api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`
+      token.value = accessToken
+      sessionStorage.setItem(STORAGE_KEYS.accessToken, accessToken)
+      
+      // If user data doesn't include role, fetch full profile
+      let fullUserData = userData
+      if (!userData?.role) {
+        console.log('Login response missing role, fetching full profile...')
+        const meResponse = await api.get('/auth/me')
+        fullUserData = meResponse.data.user
+      }
+      
+      // Save complete auth state
+      saveAuth(fullUserData, accessToken)
+      
       return true
     } catch (err) {
       error.value = err.response?.data?.error || err.message || 'Invalid email or password'
@@ -117,7 +299,7 @@ export function useAuth() {
    * @param {string} lastName
    * @param {string} email
    * @param {string} password
-   * @returns {Promise<boolean>}
+   * @returns {Promise<boolean>} Success status
    */
   const signUp = async (firstName, lastName, email, password) => {
     loading.value = true
@@ -129,9 +311,21 @@ export function useAuth() {
         password,
         display_name: `${firstName} ${lastName}`.trim(),
       })
-      const { user: userData, token: accessToken, refreshToken: refresh } = response.data
+      const { user: userData, token: accessToken } = response.data
       
-      saveAuth(userData, accessToken, refresh)
+      // Set token first
+      api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`
+      token.value = accessToken
+      sessionStorage.setItem(STORAGE_KEYS.accessToken, accessToken)
+      
+      // Fetch full profile to ensure we have all fields
+      let fullUserData = userData
+      if (!userData?.role) {
+        const meResponse = await api.get('/auth/me')
+        fullUserData = meResponse.data.user
+      }
+      
+      saveAuth(fullUserData, accessToken)
       return true
     } catch (err) {
       error.value = err.response?.data?.error || err.message || 'Failed to create account'
@@ -142,57 +336,49 @@ export function useAuth() {
   }
 
   /**
-   * Sign in with SSO provider
+   * Initiate SSO login by redirecting to the OAuth provider
    * @param {string} provider - 'google' | 'microsoft'
-   * @param {string} [callbackToken] - Token from OAuth callback
-   * @returns {Promise<boolean>}
    */
-  const signInWithSSO = async (provider, callbackToken = null) => {
+  const signInWithSSO = (provider) => {
     loading.value = true
     error.value = null
     
-    try {
-      if (callbackToken) {
-        // Handle OAuth callback with token
-        // The token is typically passed via URL after redirect
-        const response = await api.get('/auth/me', {
-          headers: { Authorization: `Bearer ${callbackToken}` }
-        })
-        
-        saveAuth(response.data.user, callbackToken)
-        return true
-      } else {
-        // Redirect to OAuth provider
-        const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-        window.location.href = `${baseUrl}/auth/${provider}`
-        return true
-      }
-    } catch (err) {
-      error.value = err.response?.data?.error || err.message || `Failed to sign in with ${provider}`
-      return false
-    } finally {
-      loading.value = false
+    // Store the current URL to redirect back after OAuth
+    const currentPath = window.location.pathname + window.location.search
+    if (currentPath !== '/auth' && currentPath !== '/auth/callback') {
+      sessionStorage.setItem('auth_redirect', currentPath)
     }
+    
+    // Redirect to backend OAuth endpoint
+    const oauthUrl = `${API_BASE_URL}/auth/${provider}`
+    window.location.href = oauthUrl
+    
+    return true
   }
 
   /**
-   * Handle OAuth callback (called from callback route)
-   * @param {string} accessToken - Token from URL
-   * @returns {Promise<boolean>}
+   * Handle OAuth callback after redirect from provider
+   * @param {string} accessToken - Token from URL query parameter
+   * @returns {Promise<boolean>} Success status
    */
   const handleOAuthCallback = async (accessToken) => {
     loading.value = true
     error.value = null
     
     try {
-      // Get user info with the token
-      const response = await api.get('/auth/me', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      })
+      // Temporarily set the token
+      api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`
       
-      saveAuth(response.data.user, accessToken)
+      // Fetch full user info (always from /auth/me to ensure complete data)
+      const response = await api.get('/auth/me')
+      const userData = response.data.user
+      
+      // Save auth state
+      saveAuth(userData, accessToken)
+      
       return true
     } catch (err) {
+      delete api.defaults.headers.common['Authorization']
       error.value = err.response?.data?.error || err.message || 'OAuth callback failed'
       return false
     } finally {
@@ -201,57 +387,67 @@ export function useAuth() {
   }
 
   /**
-   * Refresh the access token
-   * @returns {Promise<boolean>}
+   * Get the redirect path stored before OAuth flow
+   * @returns {string} Redirect path or default '/'
+   */
+  const getOAuthRedirect = () => {
+    const redirect = sessionStorage.getItem('auth_redirect')
+    sessionStorage.removeItem('auth_redirect')
+    return redirect || '/'
+  }
+
+  /**
+   * Refresh the access token using httpOnly cookie
+   * @returns {Promise<boolean>} Success status
    */
   const refreshAccessToken = async () => {
-    if (!refreshToken.value) {
-      return false
-    }
-    
     try {
-      const response = await api.post('/auth/refresh', {
-        refreshToken: refreshToken.value
+      const response = await api.post('/auth/refresh', {}, {
+        withCredentials: true
       })
       
-      const { token: newToken, refreshToken: newRefresh } = response.data
+      const { token: newToken } = response.data
       
-      token.value = newToken
-      if (newRefresh) {
-        refreshToken.value = newRefresh
+      if (newToken) {
+        token.value = newToken
+        sessionStorage.setItem(STORAGE_KEYS.accessToken, newToken)
+        api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
+        
+        // Notify WebSocket of new token
+        notifyWebSocket()
+        
+        return true
       }
       
-      localStorage.setItem(STORAGE_KEYS.accessToken, newToken)
-      if (newRefresh) {
-        localStorage.setItem(STORAGE_KEYS.refreshToken, newRefresh)
-      }
-      
-      api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
-      return true
+      return false
     } catch (err) {
       console.error('Token refresh failed:', err)
-      // If refresh fails, clear auth
       clearAuth()
       return false
     }
   }
 
   /**
-   * Sign out
+   * Sign out the user
    */
   const signOut = async () => {
     try {
-      await api.post('/auth/logout')
+      await api.post('/auth/logout', {}, { withCredentials: true })
     } catch (err) {
-      // Ignore logout errors
+      console.warn('Logout request failed:', err)
     }
     
     clearAuth()
+    
+    // Logout from WebSocket too
+    if (webSocketRef?.value?.logout) {
+      webSocketRef.value.logout()
+    }
   }
 
   /**
-   * Get current user from server
-   * @returns {Promise<Object|null>}
+   * Fetch current user from server
+   * @returns {Promise<Object|null>} User object or null
    */
   const fetchCurrentUser = async () => {
     if (!token.value) {
@@ -261,10 +457,9 @@ export function useAuth() {
     try {
       const response = await api.get('/auth/me')
       user.value = response.data.user
-      localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(response.data.user))
+      sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(response.data.user))
       return response.data.user
     } catch (err) {
-      // If unauthorized, clear auth
       if (err.response?.status === 401) {
         clearAuth()
       }
@@ -273,37 +468,36 @@ export function useAuth() {
   }
 
   /**
-   * Check if token is expired (basic check)
-   * @returns {boolean}
+   * Check if the current token is expired
+   * @returns {boolean} True if expired or no token
    */
   const isTokenExpired = () => {
     if (!token.value) return true
     
-    try {
-      // Decode JWT payload (without verification)
-      const payload = JSON.parse(atob(token.value.split('.')[1]))
-      const exp = payload.exp * 1000 // Convert to milliseconds
-      return Date.now() >= exp
-    } catch {
-      return true
-    }
+    const payload = decodeToken(token.value)
+    if (!payload || !payload.exp) return true
+    
+    // Add 30-second buffer
+    const expiryMs = payload.exp * 1000
+    const bufferMs = 30 * 1000
+    
+    return Date.now() >= (expiryMs - bufferMs)
   }
 
   /**
    * Get the current access token
-   * Useful for WebSocket authentication
    * @returns {string|null}
    */
   const getToken = () => token.value
 
   /**
-   * Set user data (for external updates)
+   * Update user data
    * @param {Object} userData
    */
   const setUser = (userData) => {
     user.value = userData
     if (userData) {
-      localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData))
+      sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData))
     }
   }
 
@@ -322,28 +516,91 @@ export function useAuth() {
     error.value = null
   }
 
+  /**
+   * Set WebSocket reference for integration
+   * @param {Object} wsRef - WebSocket composable reference
+   */
+  const setWebSocketRef = (wsRef) => {
+    webSocketRef = wsRef
+    
+    // Provide token refresh callback to WebSocket
+    if (wsRef?.setTokenRefreshCallback) {
+      wsRef.setTokenRefreshCallback(refreshAccessToken)
+    }
+  }
+
+  /**
+   * Check if initialization is complete
+   * Useful for showing loading state on app startup
+   */
+  const waitForInit = () => {
+    return new Promise((resolve) => {
+      if (isInitialized.value) {
+        resolve(isAuthenticated.value)
+        return
+      }
+      
+      const unwatch = watch(isInitialized, (initialized) => {
+        if (initialized) {
+          unwatch()
+          resolve(isAuthenticated.value)
+        }
+      })
+    })
+  }
+
   return {
-    // State
+    // Reactive state
     user,
     token: computed(() => token.value),
     isAuthenticated,
     isLoggedIn,
     loading,
     error,
+    isInitialized: computed(() => isInitialized.value),
+    isRecoveringSession: computed(() => isRecoveringSession.value),
     
-    // Methods
+    // Auth methods
     signIn,
     signUp,
     signInWithSSO,
     handleOAuthCallback,
+    getOAuthRedirect,
     signOut,
+    
+    // Token management
     refreshAccessToken,
-    fetchCurrentUser,
     isTokenExpired,
     getToken,
+    
+    // Session recovery
+    initializeAuth,
+    recoverSession,
+    waitForInit,
+    
+    // User management
+    fetchCurrentUser,
     setUser,
+    
+    // Error handling
     setError,
     clearError,
-    initializeAuth,
+    
+    // WebSocket integration
+    setWebSocketRef,
   }
+}
+
+// ============================================================================
+// AUTO-INITIALIZATION
+// ============================================================================
+
+// Start initialization when module loads (browser only)
+if (typeof window !== 'undefined') {
+  // Defer to allow app to set up first
+  setTimeout(() => {
+    initializeAuth().catch(err => {
+      console.error('Auth initialization error:', err)
+    })
+  }, 0)
 }

@@ -3,7 +3,12 @@
  * @description Central WebSocket connection manager with authentication,
  * domain-based message routing, and task management.
  * 
- * Follows the new protocol: domain:action message format
+ * Token Strategy:
+ * - Reads access token from sessionStorage (set by useAuth)
+ * - Handles auth errors by triggering token refresh
+ * - Reconnects automatically with new token after refresh
+ * 
+ * Follows the protocol: domain:action message format
  * Supports parallel task execution with client-generated taskIds
  */
 
@@ -20,6 +25,7 @@ const CONFIG = {
   reconnectMaxAttempts: 5,
   reconnectBaseDelay: 1000,
   reconnectMaxDelay: 30000,
+  authRetryDelay: 1000, // Delay before retrying after auth failure
 }
 
 // ============================================================================
@@ -32,6 +38,7 @@ const isConnected = ref(false)
 const isAuthenticated = ref(false)
 const connectionId = ref(null)
 const reconnectAttempts = ref(0)
+const isReconnecting = ref(false)
 
 // Server info (from welcome message)
 const availableProviders = ref([])
@@ -47,10 +54,77 @@ const tasks = reactive({})
 // Domain message listeners
 const domainListeners = new Map()
 
-// Internal
+// Internal state
 let heartbeatInterval = null
 let reconnectTimeout = null
 let isInitialized = false
+let tokenRefreshCallback = null // Callback to refresh token
+
+// ============================================================================
+// TOKEN MANAGEMENT
+// ============================================================================
+
+/**
+ * Get auth token from sessionStorage
+ * @returns {string|null}
+ */
+const getAuthToken = () => {
+  // Primary: sessionStorage (set by useAuth)
+  const token = sessionStorage.getItem('accessToken')
+  if (token) return token
+  
+  // Fallback: Check if there's a user object with token (legacy support)
+  try {
+    const user = sessionStorage.getItem('user')
+    if (user) {
+      const parsed = JSON.parse(user)
+      if (parsed.token) return parsed.token
+    }
+  } catch (e) {
+    // Ignore parse errors
+  }
+  
+  return null
+}
+
+/**
+ * Set callback for token refresh
+ * This should be called by useAuth to provide the refresh function
+ * @param {Function} callback - Async function that refreshes the token
+ */
+const setTokenRefreshCallback = (callback) => {
+  tokenRefreshCallback = callback
+}
+
+/**
+ * Attempt to refresh token and reconnect
+ * @returns {Promise<boolean>} Success status
+ */
+const refreshTokenAndReconnect = async () => {
+  if (!tokenRefreshCallback) {
+    console.error('No token refresh callback set')
+    return false
+  }
+  
+  try {
+    console.log('🔄 Attempting token refresh for WebSocket...')
+    const success = await tokenRefreshCallback()
+    
+    if (success) {
+      console.log('✅ Token refreshed, reconnecting WebSocket...')
+      // Disconnect and reconnect with new token
+      disconnect()
+      await connect()
+      return true
+    }
+    
+    console.error('❌ Token refresh failed')
+    return false
+  } catch (error) {
+    console.error('Token refresh error:', error)
+    return false
+  }
+}
 
 // ============================================================================
 // UTILITIES
@@ -63,29 +137,6 @@ let isInitialized = false
  */
 const generateTaskId = (prefix = 'task') => {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-/**
- * Get auth token from storage
- * @returns {string|null}
- */
-const getAuthToken = () => {
-  // Try localStorage first (from useAuth)
-  try {
-    const user = localStorage.getItem('user')
-    if (user) {
-      const parsed = JSON.parse(user)
-      if (parsed.token) return parsed.token
-    }
-  } catch (e) {
-    // Ignore
-  }
-  
-  // Try accessToken directly
-  const token = localStorage.getItem('accessToken')
-  if (token) return token
-  
-  return null
 }
 
 // ============================================================================
@@ -157,7 +208,12 @@ const handleMessage = (event) => {
       isAuthenticated.value = false
       wsUser.value = null
       wsClaims.value = null
-      console.error('Auth error:', data.error)
+      console.error('WebSocket auth error:', data.error)
+      
+      // Attempt token refresh on auth error
+      if (data.code === 'TOKEN_EXPIRED' || data.code === 'INVALID_TOKEN') {
+        handleAuthError()
+      }
       return
       
     case 'auth:logout':
@@ -172,6 +228,12 @@ const handleMessage = (event) => {
       
     case 'error':
       console.error('WebSocket error:', data.error, data.code)
+      
+      // Handle auth-related errors
+      if (data.code === 'UNAUTHORIZED' || data.code === 'TOKEN_EXPIRED') {
+        handleAuthError()
+      }
+      
       // If task-specific, update task state
       if (taskId && tasks[taskId]) {
         tasks[taskId].status = 'error'
@@ -197,6 +259,34 @@ const handleMessage = (event) => {
         }
       })
     }
+  }
+}
+
+/**
+ * Handle authentication errors by attempting token refresh
+ */
+const handleAuthError = async () => {
+  if (isReconnecting.value) return // Already handling
+  
+  isReconnecting.value = true
+  
+  try {
+    const success = await refreshTokenAndReconnect()
+    if (!success) {
+      // Notify listeners that auth failed permanently
+      const listeners = domainListeners.get('auth')
+      if (listeners) {
+        listeners.forEach(callback => {
+          try {
+            callback({ type: 'auth:failed', error: 'Token refresh failed' }, 'failed')
+          } catch (err) {
+            console.error('Auth listener error:', err)
+          }
+        })
+      }
+    }
+  } finally {
+    isReconnecting.value = false
   }
 }
 
@@ -401,7 +491,7 @@ const dismissTask = (taskId) => {
 
 /**
  * Add a listener for a specific domain
- * @param {string} domain - Domain to listen to (e.g., 'llm', 'tool')
+ * @param {string} domain - Domain to listen to (e.g., 'llm', 'tool', 'auth')
  * @param {Function} callback - Callback function (data, action) => void
  * @returns {Function} Cleanup function
  */
@@ -428,9 +518,15 @@ const addDomainListener = (domain, callback) => {
 
 /**
  * Connect to WebSocket server
+ * 
+ * Security: Token is NOT sent in URL (would be logged by servers/proxies).
+ * Instead, we connect first, then send token via message after connection opens.
+ * 
+ * @param {Object} options - Connection options
+ * @param {boolean} options.autoAuth - Automatically authenticate after connecting
  * @returns {Promise<void>}
  */
-const connect = () => {
+const connect = (options = { autoAuth: true }) => {
   return new Promise((resolve, reject) => {
     // Already connected
     if (ws.value && ws.value.readyState === WebSocket.OPEN) {
@@ -444,12 +540,8 @@ const connect = () => {
     }
     
     try {
-      // Build URL with token if available
-      let url = `${CONFIG.wsUrl}${CONFIG.wsPath}`
-      const token = getAuthToken()
-      if (token) {
-        url += `?token=${encodeURIComponent(token)}`
-      }
+      // Connect WITHOUT token in URL (security best practice)
+      const url = `${CONFIG.wsUrl}${CONFIG.wsPath}`
       
       ws.value = new WebSocket(url)
       
@@ -457,6 +549,19 @@ const connect = () => {
         isConnected.value = true
         reconnectAttempts.value = 0
         startHeartbeat()
+        
+        // Auto-authenticate after connection if token available
+        if (options.autoAuth) {
+          const token = getAuthToken()
+          if (token) {
+            // Send auth message (not in URL - more secure)
+            sendMessage({
+              type: 'auth:login',
+              token
+            })
+          }
+        }
+        
         resolve()
       }
       
@@ -467,8 +572,8 @@ const connect = () => {
         connectionId.value = null
         stopHeartbeat()
         
-        // Attempt reconnect if not intentional
-        if (event.code !== 1000) {
+        // Attempt reconnect if not intentional close
+        if (event.code !== 1000 && !isReconnecting.value) {
           attemptReconnect()
         }
       }
@@ -564,7 +669,7 @@ const attemptReconnect = () => {
 
 /**
  * Authenticate with token
- * @param {string} token - JWT token
+ * @param {string} [token] - JWT token (uses sessionStorage if not provided)
  * @returns {Promise<Object>}
  */
 const authenticate = (token) => {
@@ -574,20 +679,26 @@ const authenticate = (token) => {
       return
     }
     
+    const authToken = token || getAuthToken()
+    if (!authToken) {
+      reject(new Error('No auth token available'))
+      return
+    }
+    
     // Set up one-time listener for auth response
     const cleanup = addDomainListener('auth', (data, action) => {
       cleanup()
       if (action === 'success') {
         resolve(data)
-      } else if (action === 'error') {
-        reject(new Error(data.error))
+      } else if (action === 'error' || action === 'failed') {
+        reject(new Error(data.error || 'Authentication failed'))
       }
     })
     
     // Send auth message
     sendMessage({
       type: 'auth:login',
-      token,
+      token: authToken,
     })
     
     // Timeout after 10 seconds
@@ -599,7 +710,7 @@ const authenticate = (token) => {
 }
 
 /**
- * Logout
+ * Logout from WebSocket
  */
 const logout = () => {
   if (isConnected.value) {
@@ -615,20 +726,44 @@ const logout = () => {
 }
 
 // ============================================================================
-// INITIALIZATION (runs once on module load)
+// INITIALIZATION
 // ============================================================================
 
+/**
+ * Initialize WebSocket (called once on module load)
+ */
 const initWebSocket = () => {
   if (isInitialized) return
   isInitialized = true
   
-  // Connect immediately
-  connect().catch(err => {
-    console.error('Initial WebSocket connection failed:', err)
-  })
+  // Only connect if we have a token (user is logged in)
+  const token = getAuthToken()
+  if (token) {
+    connect().catch(err => {
+      console.error('Initial WebSocket connection failed:', err)
+    })
+  }
   
   // Periodic cleanup (only once)
   setInterval(cleanupTasks, 60000)
+}
+
+/**
+ * Ensure WebSocket is connected and authenticated
+ * Useful for components that need WebSocket
+ * @returns {Promise<void>}
+ */
+const ensureConnected = async () => {
+  if (!isConnected.value) {
+    await connect()
+  }
+  
+  if (!isAuthenticated.value) {
+    const token = getAuthToken()
+    if (token) {
+      await authenticate(token)
+    }
+  }
 }
 
 // Auto-initialize when module loads (browser only)
@@ -646,6 +781,7 @@ export const useWebSocket = () => {
     // Connection state
     isConnected: computed(() => isConnected.value),
     isAuthenticated: computed(() => isAuthenticated.value),
+    isReconnecting: computed(() => isReconnecting.value),
     connectionId: computed(() => connectionId.value),
     reconnectAttempts: computed(() => reconnectAttempts.value),
     
@@ -662,11 +798,13 @@ export const useWebSocket = () => {
     // Connection methods
     connect,
     disconnect,
+    ensureConnected,
     sendMessage,
     
     // Auth methods
     authenticate,
     logout,
+    setTokenRefreshCallback,
     
     // Task methods
     createTask,

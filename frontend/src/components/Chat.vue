@@ -1194,8 +1194,8 @@ onUnmounted(() => {
 .markdown-content :deep(p:last-child) { margin-bottom: 0; }
 
 .markdown-content :deep(pre) {
-  background: #f6f8fa;
-  color: #24292e;
+  /* background: #f6f8fa; */
+  /* color: #24292e; */
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
   overflow-x: auto;

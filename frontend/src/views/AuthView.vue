@@ -122,9 +122,12 @@
 
         <!-- Forgot Password Link -->
         <div class="text-center">
-          <a href="#" class="text-sm text-blue-600 dark:text-blue-400 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1">
+          <router-link 
+            to="/auth/reset" 
+            class="text-sm text-blue-600 dark:text-blue-400 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1"
+          >
             {{ $t('auth.forgotPassword') }}
-          </a>
+          </router-link>
         </div>
       </form>
 
@@ -270,9 +273,11 @@
         <div class="mt-6 grid grid-cols-2 gap-4">
           <!-- Google SSO -->
           <button
+            type="button"
             @click="handleSSO('google')"
+            :disabled="ssoLoading"
             :aria-label="`${$t('auth.signInWith')} ${$t('auth.google')}`"
-            class="flex items-center justify-center gap-2 px-4 py-2 border border-primary rounded-lg hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 transition-colors"
+            class="flex items-center justify-center gap-2 px-4 py-2 border border-primary rounded-lg hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -285,9 +290,11 @@
 
           <!-- Microsoft SSO -->
           <button
+            type="button"
             @click="handleSSO('microsoft')"
+            :disabled="ssoLoading"
             :aria-label="`${$t('auth.signInWith')} ${$t('auth.microsoft')}`"
-            class="flex items-center justify-center gap-2 px-4 py-2 border border-primary rounded-lg hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 transition-colors"
+            class="flex items-center justify-center gap-2 px-4 py-2 border border-primary rounded-lg hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
               <path d="M11.4 24H0V12.6h11.4V24zM24 24H12.6V12.6H24V24zM11.4 11.4H0V0h11.4v11.4zm12.6 0H12.6V0H24v11.4z" />
@@ -302,6 +309,7 @@
         <span v-if="activeTab === 'signin'">
           {{ $t('auth.noAccount') }}
           <button
+            type="button"
             @click="activeTab = 'signup'"
             class="text-blue-600 dark:text-blue-400 hover:underline font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-1"
           >
@@ -311,6 +319,7 @@
         <span v-else>
           {{ $t('auth.haveAccount') }}
           <button
+            type="button"
             @click="activeTab = 'signin'"
             class="text-blue-600 dark:text-blue-400 hover:underline font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-1"
           >
@@ -323,19 +332,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 import Button from 'primevue/button'
 import { useToast } from 'primevue/usetoast'
 import { useI18n } from 'vue-i18n'
 
 const router = useRouter()
-const { signIn, signUp, signInWithSSO, error: authError, loading: authLoading } = useAuth()
+const route = useRoute()
+const { signIn, signUp, signInWithSSO, error: authError, loading: authLoading, clearError: clearAuthError } = useAuth()
 const toast = useToast()
 const { t } = useI18n()
 
 const activeTab = ref('signin')
+const ssoLoading = ref(false)
 
 const signInForm = ref({
   email: '',
@@ -354,6 +365,32 @@ const emailError = ref(null)
 const passwordError = ref(null)
 const confirmPasswordError = ref(null)
 
+/**
+ * Check for error query param on mount (from failed OAuth)
+ */
+onMounted(() => {
+  const errorParam = route.query.error
+  if (errorParam) {
+    if (errorParam === 'session_expired') {
+      toast.add({ 
+        severity: 'warn', 
+        summary: t('auth.sessionExpired'), 
+        detail: t('auth.pleaseSignInAgain'), 
+        life: 5000 
+      })
+    } else if (errorParam === 'microsoft_failed' || errorParam === 'google_failed') {
+      toast.add({ 
+        severity: 'error', 
+        summary: t('auth.ssoFailed'), 
+        detail: t('auth.ssoFailedDetail'), 
+        life: 5000 
+      })
+    }
+    // Clear the error from URL without triggering navigation
+    router.replace({ query: { ...route.query, error: undefined } })
+  }
+})
+
 const validateEmail = () => {
   const email = activeTab.value === 'signin' ? signInForm.value.email : signUpForm.value.email
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -370,6 +407,9 @@ const clearError = (field) => {
   if (field === 'email') emailError.value = null
   if (field === 'password') passwordError.value = null
   if (field === 'confirmPassword') confirmPasswordError.value = null
+  if (field === 'firstName' || field === 'lastName') emailError.value = null
+  // Also clear auth error when user starts typing
+  clearAuthError()
 }
 
 const handleSignIn = async () => {
@@ -388,22 +428,23 @@ const handleSignIn = async () => {
 
   if (success) {
     toast.add({ severity: 'success', summary: t('common.success'), detail: t('auth.signInSuccess'), life: 3000 })
-    router.push('/')
-  } else {
-    emailError.value = authError.value || t('auth.invalidCredentials')
+    // Redirect to the intended destination or dashboard
+    const redirect = route.query.redirect || '/dashboard'
+    router.push(redirect)
   }
+  // Error is displayed via authError reactive ref
 }
 
 const handleSignUp = async () => {
   validateEmail()
 
   if (!signUpForm.value.firstName) {
-    emailError.value = 'First name is required'
+    emailError.value = t('auth.firstNameRequired') || 'First name is required'
     return
   }
 
   if (!signUpForm.value.lastName) {
-    emailError.value = 'Last name is required'
+    emailError.value = t('auth.lastNameRequired') || 'Last name is required'
     return
   }
 
@@ -435,21 +476,21 @@ const handleSignUp = async () => {
 
   if (success) {
     toast.add({ severity: 'success', summary: t('common.success'), detail: t('auth.signUpSuccess'), life: 3000 })
-    router.push('/')
-  } else {
-    emailError.value = authError.value || 'Failed to create account'
+    router.push('/dashboard')
   }
+  // Error is displayed via authError reactive ref
 }
 
-const handleSSO = async (provider) => {
-  const success = await signInWithSSO(provider, 'mock-token')
-
-  if (success) {
-    toast.add({ severity: 'success', summary: t('common.success'), detail: t('auth.signInSuccess'), life: 3000 })
-    router.push('/')
-  } else {
-    emailError.value = authError.value || `Failed to sign in with ${provider}`
-  }
+/**
+ * Handle SSO button click
+ * This initiates the OAuth flow by redirecting to the backend OAuth endpoint
+ * The page will redirect away - no local state changes needed after this
+ */
+const handleSSO = (provider) => {
+  ssoLoading.value = true
+  // signInWithSSO redirects the browser - this function won't return normally
+  // The ssoLoading state will be reset when the page reloads after OAuth
+  signInWithSSO(provider)
 }
 </script>
 
