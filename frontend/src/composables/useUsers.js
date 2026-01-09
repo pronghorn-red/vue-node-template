@@ -5,11 +5,13 @@
  * Profile Operations (self):
  * - Get/update own profile
  * - Change password
+ * - Delete own account
  * 
  * Admin Operations:
- * - List, view, update, delete users
+ * - List, view, create, update, delete users
  * - Manage roles
  * - Block/unblock users
+ * - Reset user passwords
  * - Generate password reset tokens
  * - View audit logs
  */
@@ -173,17 +175,51 @@ export function useUsers() {
 
   /**
    * Change current user's password
-   * @param {Object} data - Password change data
+   * @param {Object|string} dataOrCurrentPassword - Password change data object OR current password string
+   * @param {string} [newPassword] - New password (only if first arg is current password string)
    * @returns {Promise<void>}
    */
-  const changePassword = async (data) => {
+  const changePassword = async (dataOrCurrentPassword, newPassword = null) => {
     loading.value = true
     error.value = null
     
     try {
-      await api.put('/users/password', data)
+      // Support both calling conventions:
+      // 1. changePassword({ currentPassword, newPassword, confirmPassword })
+      // 2. changePassword(currentPassword, newPassword)
+      let payload
+      if (typeof dataOrCurrentPassword === 'string') {
+        payload = {
+          currentPassword: dataOrCurrentPassword,
+          newPassword: newPassword,
+          confirmPassword: newPassword
+        }
+      } else {
+        payload = dataOrCurrentPassword
+      }
+      
+      await api.put('/users/password', payload)
     } catch (err) {
       error.value = err.response?.data?.error || 'Failed to change password'
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Delete current user's own account
+   * Note: Superadmins cannot delete their own accounts
+   * @returns {Promise<void>}
+   */
+  const deleteOwnAccount = async () => {
+    loading.value = true
+    error.value = null
+    
+    try {
+      await api.delete('/users/me')
+    } catch (err) {
+      error.value = err.response?.data?.error || 'Failed to delete account'
       throw err
     } finally {
       loading.value = false
@@ -210,6 +246,31 @@ export function useUsers() {
       return response.data.users
     } catch (err) {
       error.value = err.response?.data?.error || 'Failed to fetch users'
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Create a new user (admin only)
+   * @param {Object} data - User data { email, display_name, password?, role?, language_preference?, email_verified? }
+   * @returns {Promise<Object>} Created user with temporaryPassword if auto-generated
+   */
+  const createUser = async (data) => {
+    loading.value = true
+    error.value = null
+    
+    try {
+      const response = await api.post('/users', data)
+      // Add to local list if we have users loaded
+      if (users.value.length > 0) {
+        users.value.unshift(response.data.user)
+        pagination.value.total++
+      }
+      return response.data
+    } catch (err) {
+      error.value = err.response?.data?.error || 'Failed to create user'
       throw err
     } finally {
       loading.value = false
@@ -291,21 +352,22 @@ export function useUsers() {
   /**
    * Block a user (admin only)
    * @param {string} userId - User ID
-   * @param {string} reason - Block reason
-   * @returns {Promise<void>}
+   * @param {string} reason - Block reason (optional)
+   * @returns {Promise<Object>} API response
    */
   const blockUser = async (userId, reason = '') => {
     loading.value = true
     error.value = null
     
     try {
-      await api.post(`/users/${userId}/block`, { reason })
+      const response = await api.post(`/users/${userId}/block`, { reason })
       // Update in local list
       const index = users.value.findIndex(u => u.id === userId)
       if (index !== -1) {
         users.value[index].is_blocked = true
         users.value[index].blocked_reason = reason
       }
+      return response.data
     } catch (err) {
       error.value = err.response?.data?.error || 'Failed to block user'
       throw err
@@ -317,20 +379,21 @@ export function useUsers() {
   /**
    * Unblock a user (admin only)
    * @param {string} userId - User ID
-   * @returns {Promise<void>}
+   * @returns {Promise<Object>} API response
    */
   const unblockUser = async (userId) => {
     loading.value = true
     error.value = null
     
     try {
-      await api.post(`/users/${userId}/unblock`)
+      const response = await api.post(`/users/${userId}/unblock`)
       // Update in local list
       const index = users.value.findIndex(u => u.id === userId)
       if (index !== -1) {
         users.value[index].is_blocked = false
         users.value[index].blocked_reason = null
       }
+      return response.data
     } catch (err) {
       error.value = err.response?.data?.error || 'Failed to unblock user'
       throw err
@@ -355,6 +418,28 @@ export function useUsers() {
       pagination.value.total--
     } catch (err) {
       error.value = err.response?.data?.error || 'Failed to delete user'
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Reset a user's password (admin only)
+   * @param {string} userId - User ID
+   * @param {string|null} password - Specific password to set, or null to auto-generate
+   * @returns {Promise<Object>} Response with temporaryPassword
+   */
+  const resetUserPassword = async (userId, password = null) => {
+    loading.value = true
+    error.value = null
+    
+    try {
+      const payload = password ? { password } : {}
+      const response = await api.post(`/users/${userId}/reset-password`, payload)
+      return response.data
+    } catch (err) {
+      error.value = err.response?.data?.error || 'Failed to reset password'
       throw err
     } finally {
       loading.value = false
@@ -458,15 +543,24 @@ export function useUsers() {
     getProfile,
     updateProfile,
     changePassword,
+    deleteOwnAccount,
+    
+    // Profile operation aliases (for ProfileView.vue compatibility)
+    getMyProfile: getProfile,
+    updateMyProfile: updateProfile,
+    changeMyPassword: changePassword,
+    deleteMyAccount: deleteOwnAccount,
     
     // Admin operations
     listUsers,
+    createUser,
     getUser,
     updateUser,
     updateUserRole,
     blockUser,
     unblockUser,
     deleteUser,
+    resetUserPassword,
     generateResetToken,
     getUserAuditLog,
     listPasswordResets,

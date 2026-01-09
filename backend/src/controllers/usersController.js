@@ -1,7 +1,7 @@
 /**
  * @fileoverview Users Controller
  * @description Handles user management operations including profile management,
- * admin user operations, role management, and password reset administration.
+ * admin user operations, role management, user creation, and password reset administration.
  * 
  * @module controllers/usersController
  */
@@ -44,6 +44,35 @@ const formatUserResponse = (user) => ({
   updated_at: user.updated_at,
   last_login: user.last_login
 });
+
+/**
+ * Generate a secure random password
+ * @param {number} length - Password length (default 16)
+ * @returns {string} Random password
+ */
+const generateRandomPassword = (length = 16) => {
+  const lowercase = 'abcdefghijklmnopqrstuvwxyz';
+  const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const numbers = '0123456789';
+  const symbols = '!@#$%^&*()_+-=';
+  const all = lowercase + uppercase + numbers + symbols;
+  
+  let password = '';
+  
+  // Ensure at least one of each type
+  password += lowercase[crypto.randomInt(lowercase.length)];
+  password += uppercase[crypto.randomInt(uppercase.length)];
+  password += numbers[crypto.randomInt(numbers.length)];
+  password += symbols[crypto.randomInt(symbols.length)];
+  
+  // Fill the rest randomly
+  for (let i = password.length; i < length; i++) {
+    password += all[crypto.randomInt(all.length)];
+  }
+  
+  // Shuffle the password
+  return password.split('').sort(() => crypto.randomInt(3) - 1).join('');
+};
 
 /**
  * Log user action to audit log
@@ -136,7 +165,7 @@ const updateProfile = async (req, res) => {
   values.push(userId);
   
   const result = await query(
-    `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+    `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} RETURNING *`,
     values
   );
   
@@ -196,7 +225,7 @@ const changePassword = async (req, res) => {
   
   // OAuth users may not have a password
   if (!user.password_hash) {
-    throw ApiError.badRequest('Cannot change password for OAuth accounts');
+    throw ApiError.badRequest('Cannot change password for OAuth-only accounts');
   }
   
   // Verify current password
@@ -208,7 +237,7 @@ const changePassword = async (req, res) => {
   // Hash and update new password
   const newHash = await bcrypt.hash(newPassword, 12);
   await query(
-    'UPDATE users SET password_hash = $1 WHERE id = $2',
+    'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
     [newHash, userId]
   );
   
@@ -225,6 +254,39 @@ const changePassword = async (req, res) => {
   res.json({
     success: true,
     message: 'Password changed successfully'
+  });
+};
+
+/**
+ * Delete own account (user self-service)
+ * Superadmins cannot delete their own accounts
+ * @param {Object} req - Express request
+ * @param {Object} res - Express response
+ */
+const deleteOwnAccount = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  
+  // Superadmins cannot delete their own account for safety
+  if (userRole === 'superadmin') {
+    throw ApiError.forbidden('Superadmin accounts cannot be self-deleted. Contact another superadmin.');
+  }
+  
+  await query('DELETE FROM users WHERE id = $1', [userId]);
+  
+  await logUserAction({
+    userId,
+    actorId: userId,
+    action: 'account_self_deleted',
+    details: {},
+    req
+  });
+  
+  logger.info('User deleted own account', { userId });
+  
+  res.json({
+    success: true,
+    message: 'Account deleted successfully'
   });
 };
 
@@ -299,12 +361,11 @@ const listUsers = async (req, res) => {
   const total = parseInt(countResult.rows[0].count);
   
   // Get users
-  values.push(parseInt(limit), offset);
   const usersResult = await query(
     `SELECT * FROM users ${whereClause} 
      ORDER BY ${actualSortBy} ${actualSortOrder}
-     LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
-    values
+     LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+    [...values, parseInt(limit), offset]
   );
   
   res.json({
@@ -320,16 +381,123 @@ const listUsers = async (req, res) => {
 };
 
 /**
- * Get a specific user by ID (admin only)
+ * Get single user by ID (admin only)
  * @param {Object} req - Express request
  * @param {Object} res - Express response
  */
 const getUser = async (req, res) => {
-  // targetUser is set by canAccessUser middleware
+  const targetUser = req.targetUser;
+  
   res.json({
     success: true,
-    user: formatUserResponse(req.targetUser)
+    user: formatUserResponse(targetUser)
   });
+};
+
+/**
+ * Create a new user (admin only)
+ * @param {Object} req - Express request
+ * @param {Object} res - Express response
+ */
+const createUser = async (req, res) => {
+  const { 
+    email, 
+    display_name, 
+    password, // Optional - will generate if not provided
+    role = 'user',
+    language_preference = 'en',
+    email_verified = false,
+    send_password = false // If true, return the generated password
+  } = req.body;
+  
+  const actor = req.user;
+  
+  // Validation
+  if (!email || !display_name) {
+    throw ApiError.badRequest('Email and display name are required');
+  }
+  
+  // Check email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    throw ApiError.badRequest('Invalid email format');
+  }
+  
+  // Check if role is valid and actor can assign it
+  if (role && !VALID_ROLES.includes(role)) {
+    throw ApiError.badRequest(`Role must be one of: ${VALID_ROLES.join(', ')}`);
+  }
+  
+  // Check role hierarchy - can't create users with equal or higher role
+  const actorLevel = getRoleLevel(actor.role);
+  const newUserLevel = getRoleLevel(role);
+  if (newUserLevel >= actorLevel) {
+    throw ApiError.forbidden('Cannot create user with equal or higher role than your own');
+  }
+  
+  // Check if email exists
+  const existing = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+  if (existing.rows.length > 0) {
+    throw ApiError.conflict('Email already registered');
+  }
+  
+  // Generate password if not provided
+  const actualPassword = password || generateRandomPassword();
+  const passwordHash = await bcrypt.hash(actualPassword, 12);
+  
+  // Create user
+  const result = await query(
+    `INSERT INTO users (
+      email, 
+      password_hash, 
+      display_name, 
+      role,
+      language_preference,
+      email_verified,
+      oauth_provider,
+      created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, 'local', NOW())
+    RETURNING *`,
+    [
+      email.toLowerCase(), 
+      passwordHash, 
+      display_name,
+      role,
+      language_preference,
+      email_verified
+    ]
+  );
+  
+  const newUser = result.rows[0];
+  
+  await logUserAction({
+    userId: newUser.id,
+    actorId: actor.id,
+    action: 'user_created_by_admin',
+    details: { role, email_verified },
+    req
+  });
+  
+  logger.info('User created by admin', { 
+    newUserId: newUser.id, 
+    adminId: actor.id,
+    email: newUser.email
+  });
+  
+  // Build response
+  const response = {
+    success: true,
+    message: 'User created successfully',
+    user: formatUserResponse(newUser)
+  };
+  
+  // Include temporary password if requested or if auto-generated
+  if (send_password || !password) {
+    response.temporaryPassword = actualPassword;
+    response.message = 'User created successfully. Please share the temporary password securely with the user.';
+  }
+  
+  res.status(201).json(response);
 };
 
 /**
@@ -340,6 +508,7 @@ const getUser = async (req, res) => {
 const updateUser = async (req, res) => {
   const { display_name, avatar_url, language_preference, email_verified } = req.body;
   const targetUser = req.targetUser;
+  const actor = req.user;
   
   const updates = [];
   const values = [];
@@ -365,7 +534,7 @@ const updateUser = async (req, res) => {
   
   if (email_verified !== undefined) {
     updates.push(`email_verified = $${paramIndex++}`);
-    values.push(!!email_verified);
+    values.push(Boolean(email_verified));
   }
   
   if (updates.length === 0) {
@@ -375,13 +544,13 @@ const updateUser = async (req, res) => {
   values.push(targetUser.id);
   
   const result = await query(
-    `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+    `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} RETURNING *`,
     values
   );
   
   await logUserAction({
     userId: targetUser.id,
-    actorId: req.user.id,
+    actorId: actor.id,
     action: 'user_updated_by_admin',
     details: { fields: Object.keys(req.body) },
     req
@@ -389,7 +558,7 @@ const updateUser = async (req, res) => {
   
   logger.info('User updated by admin', { 
     targetUserId: targetUser.id, 
-    adminId: req.user.id 
+    adminId: actor.id 
   });
   
   res.json({
@@ -400,7 +569,7 @@ const updateUser = async (req, res) => {
 };
 
 /**
- * Update user's role (admin only, with hierarchy checks)
+ * Update user role (admin only)
  * @param {Object} req - Express request
  * @param {Object} res - Express response
  */
@@ -409,8 +578,7 @@ const updateUserRole = async (req, res) => {
   const targetUser = req.targetUser;
   const actor = req.user;
   
-  // Prevent self-modification (except superadmin)
-  if (req.isSelf && actor.role !== 'superadmin') {
+  if (req.isSelf) {
     throw ApiError.forbidden('Cannot modify your own role');
   }
   
@@ -418,28 +586,26 @@ const updateUserRole = async (req, res) => {
   const values = [];
   let paramIndex = 1;
   
-  // Handle primary role change
   if (role !== undefined) {
     if (!isValidRole(role)) {
-      throw ApiError.badRequest(`Invalid role. Must be one of: ${VALID_ROLES.join(', ')}`);
+      throw ApiError.badRequest(`Role must be one of: ${VALID_ROLES.join(', ')}`);
     }
     
-    // Check if actor can assign this role
+    // Check role hierarchy
     if (!canModifyUserRole(actor.role, targetUser.role, role)) {
-      throw ApiError.forbidden('Cannot assign role equal to or higher than your own');
+      throw ApiError.forbidden('Cannot assign this role - insufficient permissions');
     }
     
     updates.push(`role = $${paramIndex++}`);
     values.push(role);
   }
   
-  // Handle additional roles
   if (additional_roles !== undefined) {
     if (!Array.isArray(additional_roles)) {
       throw ApiError.badRequest('Additional roles must be an array');
     }
     
-    // Validate each additional role (these are custom, not hierarchy-based)
+    // Validate each additional role
     const validAdditionalRoles = additional_roles.filter(r => 
       typeof r === 'string' && r.length > 0 && r.length <= 50
     );
@@ -455,7 +621,7 @@ const updateUserRole = async (req, res) => {
   values.push(targetUser.id);
   
   const result = await query(
-    `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+    `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} RETURNING *`,
     values
   );
   
@@ -503,7 +669,7 @@ const blockUser = async (req, res) => {
   }
   
   await query(
-    `UPDATE users SET is_blocked = true, blocked_reason = $1, blocked_by = $2 WHERE id = $3`,
+    `UPDATE users SET is_blocked = true, blocked_reason = $1, blocked_by = $2, blocked_at = NOW(), updated_at = NOW() WHERE id = $3`,
     [reason || 'Blocked by administrator', req.user.id, targetUser.id]
   );
   
@@ -540,7 +706,7 @@ const unblockUser = async (req, res) => {
   }
   
   await query(
-    `UPDATE users SET is_blocked = false WHERE id = $1`,
+    `UPDATE users SET is_blocked = false, blocked_reason = NULL, blocked_by = NULL, blocked_at = NULL, updated_at = NOW() WHERE id = $1`,
     [targetUser.id]
   );
   
@@ -634,17 +800,22 @@ const generateResetToken = async (req, res) => {
   // Update user
   await query(
     `UPDATE users 
-     SET reset_token = $1, reset_token_expires = $2, reset_token_used = false 
+     SET reset_token = $1, reset_token_expires = $2, reset_token_used = false, updated_at = NOW()
      WHERE id = $3`,
     [resetTokenHash, expiresAt, targetUser.id]
   );
   
-  // Log to password_reset_requests table
-  await query(
-    `INSERT INTO password_reset_requests (user_id, reset_token_hash, expires_at, ip_address, user_agent)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [targetUser.id, resetTokenHash, expiresAt, req.ip, req.get('user-agent')]
-  );
+  // Log to password_reset_requests table if it exists
+  try {
+    await query(
+      `INSERT INTO password_reset_requests (user_id, reset_token_hash, expires_at, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [targetUser.id, resetTokenHash, expiresAt, req.ip, req.get('user-agent')]
+    );
+  } catch (error) {
+    // Table might not exist, that's okay
+    logger.debug('Could not log to password_reset_requests', { error: error.message });
+  }
   
   await logUserAction({
     userId: targetUser.id,
@@ -666,6 +837,60 @@ const generateResetToken = async (req, res) => {
     resetToken,
     expiresAt,
     resetUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/reset?token=${resetToken}`
+  });
+};
+
+/**
+ * Reset user's password to a new random password (admin only)
+ * Returns the new password for admin to share with user
+ * @param {Object} req - Express request
+ * @param {Object} res - Express response
+ */
+const resetUserPassword = async (req, res) => {
+  const targetUser = req.targetUser;
+  const { password } = req.body; // Optional - admin can specify or let system generate
+  
+  // Generate new password
+  const newPassword = password || generateRandomPassword();
+  
+  // Validate if admin provided password
+  if (password && password.length < 8) {
+    throw ApiError.badRequest('Password must be at least 8 characters');
+  }
+  
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  
+  // Update user's password
+  await query(
+    `UPDATE users 
+     SET password_hash = $1, 
+         reset_token = NULL, 
+         reset_token_expires = NULL, 
+         reset_token_used = NULL,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [passwordHash, targetUser.id]
+  );
+  
+  await logUserAction({
+    userId: targetUser.id,
+    actorId: req.user.id,
+    action: 'admin_reset_password',
+    details: { generated: !password },
+    req
+  });
+  
+  logger.info('Password reset by admin', { 
+    targetUserId: targetUser.id, 
+    adminId: req.user.id 
+  });
+  
+  res.json({
+    success: true,
+    message: 'Password has been reset. Please share the new password securely with the user.',
+    temporaryPassword: newPassword,
+    userId: targetUser.id,
+    email: targetUser.email
   });
 };
 
@@ -714,10 +939,12 @@ module.exports = {
   getProfile,
   updateProfile,
   changePassword,
+  deleteOwnAccount,
   
   // User management (admin)
   listUsers,
   getUser,
+  createUser,
   updateUser,
   updateUserRole,
   blockUser,
@@ -727,7 +954,11 @@ module.exports = {
   // Password reset management (admin)
   listPasswordResets,
   generateResetToken,
+  resetUserPassword,
   
   // Audit
-  getUserAuditLog
+  getUserAuditLog,
+  
+  // Helpers (exported for testing)
+  generateRandomPassword
 };

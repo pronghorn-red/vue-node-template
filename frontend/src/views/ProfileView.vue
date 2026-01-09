@@ -3,10 +3,10 @@
     <!-- Page Header -->
     <div class="mb-6">
       <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-        {{ $t('profile.title', 'My Profile') }}
+        My Profile
       </h1>
       <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
-        {{ $t('profile.subtitle', 'Manage your account settings and preferences') }}
+        Manage your account settings and preferences
       </p>
     </div>
 
@@ -26,23 +26,22 @@
     </Message>
 
     <div v-if="profile" class="space-y-6">
-      <!-- Profile Card -->
+      <!-- Personal Information Card -->
       <Card>
         <template #title>
           <div class="flex items-center gap-3">
             <i class="pi pi-user text-blue-500"></i>
-            <span>{{ $t('profile.personalInfo', 'Personal Information') }}</span>
+            <span>Personal Information</span>
           </div>
         </template>
         <template #content>
           <div class="flex flex-col md:flex-row gap-6">
             <!-- Avatar Section -->
-            <div class="flex flex-col items-center gap-3">
+            <div class="flex flex-col items-center">
               <div class="relative">
                 <Avatar 
                   v-if="profile.avatar_url"
                   :image="profile.avatar_url" 
-                  size="xlarge" 
                   shape="circle"
                   class="w-24 h-24"
                 />
@@ -50,17 +49,11 @@
                   v-else
                   class="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-2xl font-bold"
                 >
-                  {{ getUserInitials(profile) }}
+                  {{ userInitials }}
                 </div>
-                <!-- Role Badge -->
-                <span 
-                  :class="['absolute -bottom-1 -right-1 px-2 py-0.5 text-xs font-medium rounded-full', getRoleColor(profile.role)]"
-                >
-                  {{ getRoleLabel(profile.role) }}
-                </span>
               </div>
-              <!-- Additional Roles -->
-              <div v-if="profile.additional_roles?.length" class="flex flex-wrap gap-1 justify-center">
+              <Tag :value="getRoleLabel(profile.role)" :severity="getRoleSeverity(profile.role)" class="mt-2" />
+              <div v-if="profile.additional_roles?.length" class="flex flex-wrap gap-1 mt-1 justify-center">
                 <Tag 
                   v-for="role in profile.additional_roles" 
                   :key="role"
@@ -71,73 +64,48 @@
               </div>
             </div>
 
-            <!-- Profile Form -->
+            <!-- Form Fields -->
             <div class="flex-1 space-y-4">
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <!-- Display Name -->
                 <div class="field">
-                  <label for="display_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {{ $t('profile.displayName', 'Display Name') }}
-                  </label>
-                  <InputText 
-                    id="display_name"
-                    v-model="editForm.display_name" 
-                    class="w-full"
-                    :placeholder="$t('profile.displayNamePlaceholder', 'Your name')"
-                  />
+                  <label class="block text-sm font-medium mb-1">Display Name</label>
+                  <InputText v-model="editForm.display_name" class="w-full" />
                 </div>
 
                 <!-- Email (Read-only) -->
                 <div class="field">
-                  <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {{ $t('profile.email', 'Email') }}
-                  </label>
-                  <InputText 
-                    id="email"
-                    :value="profile.email" 
-                    class="w-full"
-                    disabled
-                  />
-                  <small class="text-gray-500">{{ $t('profile.emailReadOnly', 'Email cannot be changed') }}</small>
+                  <label class="block text-sm font-medium mb-1">Email</label>
+                  <InputText :value="profile.email" disabled class="w-full" />
+                  <small class="text-gray-500">Email cannot be changed</small>
                 </div>
+              </div>
 
-                <!-- Avatar URL -->
-                <div class="field md:col-span-2">
-                  <label for="avatar_url" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {{ $t('profile.avatarUrl', 'Avatar URL') }}
-                  </label>
-                  <InputText 
-                    id="avatar_url"
-                    v-model="editForm.avatar_url" 
-                    class="w-full"
-                    :placeholder="$t('profile.avatarUrlPlaceholder', 'https://example.com/avatar.jpg')"
-                  />
-                </div>
+              <!-- Avatar URL -->
+              <div class="field">
+                <label class="block text-sm font-medium mb-1">Avatar URL</label>
+                <InputText v-model="editForm.avatar_url" class="w-full" placeholder="https://example.com/avatar.jpg" />
+              </div>
 
-                <!-- Language Preference -->
-                <div class="field">
-                  <label for="language" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {{ $t('profile.language', 'Language') }}
-                  </label>
-                  <Select 
-                    id="language"
-                    v-model="editForm.language_preference" 
-                    :options="languageOptions"
-                    optionLabel="label"
-                    optionValue="value"
-                    class="w-full"
-                  />
-                </div>
+              <!-- Language Preference -->
+              <div class="field">
+                <label class="block text-sm font-medium mb-1">Language</label>
+                <Select 
+                  v-model="editForm.language_preference" 
+                  :options="languageOptions"
+                  optionLabel="label"
+                  optionValue="value"
+                  class="w-full md:w-48"
+                />
               </div>
 
               <!-- Save Button -->
               <div class="flex justify-end pt-4">
                 <Button 
-                  :label="$t('common.save', 'Save Changes')"
-                  icon="pi pi-check"
+                  label="Save" 
+                  icon="pi pi-check" 
+                  @click="saveProfile" 
                   :loading="saving"
-                  @click="saveProfile"
-                  :disabled="!hasProfileChanges"
                 />
               </div>
             </div>
@@ -145,196 +113,165 @@
         </template>
       </Card>
 
-      <!-- Account Info Card -->
+      <!-- Account Information Card -->
       <Card>
         <template #title>
           <div class="flex items-center gap-3">
             <i class="pi pi-info-circle text-blue-500"></i>
-            <span>{{ $t('profile.accountInfo', 'Account Information') }}</span>
+            <span>Account Information</span>
           </div>
         </template>
         <template #content>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <span class="text-gray-500 dark:text-gray-400">{{ $t('profile.accountType', 'Account Type') }}:</span>
-              <span class="ml-2 font-medium">{{ profile.oauth_provider === 'local' ? 'Email/Password' : profile.oauth_provider }}</span>
+              <span class="text-sm text-gray-500 dark:text-gray-400">Account Type</span>
+              <p class="font-medium text-gray-900 dark:text-white capitalize">
+                {{ profile.oauth_provider === 'local' ? 'Email/Password' : profile.oauth_provider || 'Email/Password' }}
+              </p>
             </div>
             <div>
-              <span class="text-gray-500 dark:text-gray-400">{{ $t('profile.emailVerified', 'Email Verified') }}:</span>
-              <span class="ml-2">
-                <i :class="profile.email_verified ? 'pi pi-check-circle text-green-500' : 'pi pi-times-circle text-red-500'"></i>
-              </span>
+              <span class="text-sm text-gray-500 dark:text-gray-400">Email Verified</span>
+              <p>
+                <Tag :value="profile.email_verified ? 'Verified' : 'Not Verified'" :severity="profile.email_verified ? 'success' : 'warning'" />
+              </p>
             </div>
             <div>
-              <span class="text-gray-500 dark:text-gray-400">{{ $t('profile.memberSince', 'Member Since') }}:</span>
-              <span class="ml-2 font-medium">{{ formatDate(profile.created_at) }}</span>
+              <span class="text-sm text-gray-500 dark:text-gray-400">Member Since</span>
+              <p class="font-medium text-gray-900 dark:text-white">
+                {{ formatDate(profile.created_at) }}
+              </p>
             </div>
             <div>
-              <span class="text-gray-500 dark:text-gray-400">{{ $t('profile.lastLogin', 'Last Login') }}:</span>
-              <span class="ml-2 font-medium">{{ formatDate(profile.last_login) }}</span>
+              <span class="text-sm text-gray-500 dark:text-gray-400">Last Login</span>
+              <p class="font-medium text-gray-900 dark:text-white">
+                {{ formatDate(profile.last_login) }}
+              </p>
             </div>
           </div>
         </template>
       </Card>
 
-      <!-- Change Password Card (only for local accounts) -->
-      <Card v-if="profile.oauth_provider === 'local'">
+      <!-- Change Password Card (only for users with password) -->
+      <Card v-if="!profile.oauth_provider || profile.oauth_provider === 'local'">
         <template #title>
           <div class="flex items-center gap-3">
             <i class="pi pi-lock text-blue-500"></i>
-            <span>{{ $t('profile.changePassword', 'Change Password') }}</span>
+            <span>Change Password</span>
           </div>
         </template>
         <template #content>
-          <div class="max-w-md space-y-4">
+          <div class="space-y-4 max-w-md">
             <div class="field">
-              <label for="currentPassword" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {{ $t('profile.currentPassword', 'Current Password') }}
-              </label>
-              <Password 
-                id="currentPassword"
-                v-model="passwordForm.currentPassword" 
-                :feedback="false"
-                toggleMask
-                class="w-full"
-                inputClass="w-full"
-              />
+              <label class="block text-sm font-medium mb-1">Current Password</label>
+              <Password v-model="passwordForm.currentPassword" :feedback="false" toggleMask class="w-full" />
             </div>
             <div class="field">
-              <label for="newPassword" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {{ $t('profile.newPassword', 'New Password') }}
-              </label>
-              <Password 
-                id="newPassword"
-                v-model="passwordForm.newPassword" 
-                toggleMask
-                class="w-full"
-                inputClass="w-full"
-              />
+              <label class="block text-sm font-medium mb-1">New Password</label>
+              <Password v-model="passwordForm.newPassword" toggleMask class="w-full" />
             </div>
             <div class="field">
-              <label for="confirmPassword" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {{ $t('profile.confirmPassword', 'Confirm New Password') }}
-              </label>
-              <Password 
-                id="confirmPassword"
-                v-model="passwordForm.confirmPassword" 
-                :feedback="false"
-                toggleMask
-                class="w-full"
-                inputClass="w-full"
-              />
+              <label class="block text-sm font-medium mb-1">Confirm New Password</label>
+              <Password v-model="passwordForm.confirmPassword" :feedback="false" toggleMask class="w-full" />
             </div>
             <div class="flex justify-end pt-2">
               <Button 
-                :label="$t('profile.updatePassword', 'Update Password')"
-                icon="pi pi-lock"
-                :loading="changingPassword"
-                @click="handleChangePassword"
-                :disabled="!canChangePassword"
+                label="Update Password" 
+                icon="pi pi-key"
                 severity="warning"
+                @click="handleChangePassword" 
+                :loading="changingPassword"
+                :disabled="!canChangePassword"
               />
             </div>
           </div>
         </template>
       </Card>
 
-      <!-- Danger Zone -->
-      <Card class="border-red-200 dark:border-red-800">
+      <!-- Danger Zone Card (hidden for superadmins) -->
+      <Card v-if="profile.role !== 'superadmin'" class="border-red-200 dark:border-red-800">
         <template #title>
           <div class="flex items-center gap-3 text-red-600 dark:text-red-400">
             <i class="pi pi-exclamation-triangle"></i>
-            <span>{{ $t('profile.dangerZone', 'Danger Zone') }}</span>
+            <span>Danger Zone</span>
           </div>
         </template>
         <template #content>
           <div class="flex items-center justify-between">
             <div>
-              <p class="font-medium text-gray-900 dark:text-white">{{ $t('profile.deleteAccount', 'Delete Account') }}</p>
+              <p class="font-medium text-gray-900 dark:text-white">Delete Account</p>
               <p class="text-sm text-gray-500 dark:text-gray-400">
-                {{ $t('profile.deleteAccountWarning', 'Once deleted, your account cannot be recovered.') }}
+                Permanently delete your account and all associated data. This action cannot be undone.
               </p>
             </div>
             <Button 
-              :label="$t('common.delete', 'Delete')"
-              severity="danger"
+              label="Delete Account" 
+              severity="danger" 
               outlined
-              @click="showDeleteDialog = true"
+              @click="confirmDeleteAccount"
             />
+          </div>
+        </template>
+      </Card>
+
+      <!-- Superadmin notice -->
+      <Card v-else class="border-blue-200 dark:border-blue-800">
+        <template #content>
+          <div class="flex items-center gap-3 text-blue-600 dark:text-blue-400">
+            <i class="pi pi-shield text-2xl"></i>
+            <div>
+              <p class="font-medium">Superadmin Account Protected</p>
+              <p class="text-sm opacity-75">
+                Superadmin accounts cannot be self-deleted for security reasons. 
+                Contact another superadmin if you need to transfer or remove this account.
+              </p>
+            </div>
           </div>
         </template>
       </Card>
     </div>
 
-    <!-- Delete Confirmation Dialog -->
-    <Dialog 
-      v-model:visible="showDeleteDialog" 
-      :header="$t('profile.deleteAccount', 'Delete Account')"
-      :modal="true"
-      :style="{ width: '400px' }"
-    >
-      <div class="flex items-start gap-4">
-        <div class="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center flex-shrink-0">
-          <i class="pi pi-exclamation-triangle text-2xl text-red-500"></i>
-        </div>
-        <div>
-          <p class="text-gray-700 dark:text-gray-300">
-            {{ $t('profile.deleteConfirmMessage', 'Are you sure you want to delete your account? This action cannot be undone.') }}
-          </p>
-        </div>
-      </div>
-      <template #footer>
-        <Button 
-          :label="$t('common.cancel', 'Cancel')" 
-          severity="secondary" 
-          @click="showDeleteDialog = false" 
-        />
-        <Button 
-          :label="$t('common.delete', 'Delete')" 
-          severity="danger" 
-          @click="handleDeleteAccount" 
-        />
-      </template>
-    </Dialog>
+    <!-- ConfirmDialog - Required for useConfirm() -->
+    <ConfirmDialog />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useConfirm } from 'primevue/useconfirm'
 import { useUsers } from '@/composables/useUsers'
 import { useAuth } from '@/composables/useAuth'
 import Card from 'primevue/card'
+import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Password from 'primevue/password'
-import Button from 'primevue/button'
 import Select from 'primevue/select'
-import Avatar from 'primevue/avatar'
 import Tag from 'primevue/tag'
+import Avatar from 'primevue/avatar'
 import Message from 'primevue/message'
-import Dialog from 'primevue/dialog'
+import ConfirmDialog from 'primevue/confirmdialog'
 
 const router = useRouter()
-const { signOut, user: authUser } = useAuth()
-const { 
-  getProfile, 
-  updateProfile, 
-  changePassword,
-  loading, 
-  error, 
+const confirm = useConfirm()
+const { user: authUser, signOut } = useAuth()
+const {
+  loading,
+  error,
   clearError,
+  getMyProfile,
+  updateMyProfile,
+  changeMyPassword,
+  deleteMyAccount,
   getUserInitials,
-  getRoleColor,
   getRoleLabel,
   formatDate
 } = useUsers()
 
-// State
+// Local state
 const profile = ref(null)
 const saving = ref(false)
 const changingPassword = ref(false)
 const successMessage = ref('')
-const showDeleteDialog = ref(false)
 
 // Form state
 const editForm = ref({
@@ -356,48 +293,58 @@ const languageOptions = [
 ]
 
 // Computed
-const hasProfileChanges = computed(() => {
-  if (!profile.value) return false
-  return (
-    editForm.value.display_name !== profile.value.display_name ||
-    editForm.value.avatar_url !== (profile.value.avatar_url || '') ||
-    editForm.value.language_preference !== profile.value.language_preference
-  )
+const userInitials = computed(() => {
+  if (!profile.value?.display_name) return '?'
+  return profile.value.display_name
+    .split(' ')
+    .map(n => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
 })
 
 const canChangePassword = computed(() => {
-  return (
-    passwordForm.value.currentPassword &&
-    passwordForm.value.newPassword &&
-    passwordForm.value.newPassword.length >= 8 &&
-    passwordForm.value.newPassword === passwordForm.value.confirmPassword
-  )
+  return passwordForm.value.currentPassword &&
+         passwordForm.value.newPassword &&
+         passwordForm.value.confirmPassword &&
+         passwordForm.value.newPassword === passwordForm.value.confirmPassword &&
+         passwordForm.value.newPassword.length >= 8
 })
 
-// Methods
-const loadProfile = async () => {
-  try {
-    profile.value = await getProfile()
-    resetEditForm()
-  } catch (err) {
-    console.error('Failed to load profile:', err)
+// Role severity
+const getRoleSeverity = (role) => {
+  switch (role) {
+    case 'superadmin': return 'danger'
+    case 'admin': return 'warning'
+    default: return 'info'
   }
 }
 
-const resetEditForm = () => {
-  if (profile.value) {
+// Sync form with profile
+watch(profile, (newProfile) => {
+  if (newProfile) {
     editForm.value = {
-      display_name: profile.value.display_name,
-      avatar_url: profile.value.avatar_url || '',
-      language_preference: profile.value.language_preference || 'en'
+      display_name: newProfile.display_name || '',
+      avatar_url: newProfile.avatar_url || '',
+      language_preference: newProfile.language_preference || 'en'
     }
+  }
+}, { immediate: true })
+
+// Actions
+const loadProfile = async () => {
+  try {
+    const data = await getMyProfile()
+    profile.value = data
+  } catch (err) {
+    console.error('Failed to load profile:', err)
   }
 }
 
 const saveProfile = async () => {
   saving.value = true
   try {
-    const updated = await updateProfile(editForm.value)
+    const updated = await updateMyProfile(editForm.value)
     profile.value = updated
     successMessage.value = 'Profile updated successfully'
     
@@ -430,15 +377,13 @@ const saveProfile = async () => {
 }
 
 const handleChangePassword = async () => {
+  if (!canChangePassword.value) return
+  
   changingPassword.value = true
   try {
-    await changePassword(passwordForm.value)
+    await changeMyPassword(passwordForm.value.currentPassword, passwordForm.value.newPassword)
     successMessage.value = 'Password changed successfully'
-    passwordForm.value = {
-      currentPassword: '',
-      newPassword: '',
-      confirmPassword: ''
-    }
+    passwordForm.value = { currentPassword: '', newPassword: '', confirmPassword: '' }
   } catch (err) {
     console.error('Failed to change password:', err)
   } finally {
@@ -446,13 +391,33 @@ const handleChangePassword = async () => {
   }
 }
 
-const handleDeleteAccount = () => {
-  // TODO: Implement account deletion API
-  console.log('Account deletion not yet implemented')
-  showDeleteDialog.value = false
+const confirmDeleteAccount = () => {
+  // Double check - superadmins should never see this button, but safety first
+  if (profile.value?.role === 'superadmin') {
+    return
+  }
+  
+  confirm.require({
+    message: 'Are you sure you want to delete your account? This action cannot be undone and all your data will be permanently removed.',
+    header: 'Delete Account',
+    icon: 'pi pi-exclamation-triangle',
+    rejectClass: 'p-button-secondary p-button-outlined',
+    rejectLabel: 'Cancel',
+    acceptClass: 'p-button-danger',
+    acceptLabel: 'Delete My Account',
+    accept: async () => {
+      try {
+        await deleteMyAccount()
+        await signOut()
+        router.push('/auth')
+      } catch (err) {
+        console.error('Failed to delete account:', err)
+      }
+    }
+  })
 }
 
-// Lifecycle
+// Load profile on mount
 onMounted(() => {
   loadProfile()
 })
@@ -472,28 +437,16 @@ onMounted(() => {
 }
 
 :deep(.p-inputtext),
-:deep(.p-password input),
-:deep(.p-select) {
+:deep(.p-select),
+:deep(.p-password input) {
   @apply bg-white dark:bg-slate-700 border-gray-300 dark:border-slate-600;
 }
 
-:deep(.p-inputtext:disabled) {
-  @apply bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-gray-400;
+:deep(.p-password) {
+  @apply w-full;
 }
 
-:deep(.p-dialog) {
-  @apply bg-white dark:bg-slate-800;
-}
-
-:deep(.p-dialog .p-dialog-header) {
-  @apply bg-white dark:bg-slate-800 text-gray-900 dark:text-white;
-}
-
-:deep(.p-dialog .p-dialog-content) {
-  @apply bg-white dark:bg-slate-800;
-}
-
-:deep(.p-dialog .p-dialog-footer) {
-  @apply bg-white dark:bg-slate-800;
+:deep(.p-password input) {
+  @apply w-full;
 }
 </style>

@@ -39,6 +39,7 @@ let msalClient = null;
 
 /**
  * Find or create user from OAuth profile
+ * Implements account linking: if email exists, links OAuth to existing account
  * @async
  * @param {string} provider - OAuth provider name
  * @param {Object} profile - OAuth profile data
@@ -49,52 +50,115 @@ const findOrCreateOAuthUser = async (provider, profile) => {
     throw new Error('Database not configured - OAuth authentication requires database');
   }
   
-  const email = profile.emails?.[0]?.value || profile.email;
-  const displayName = profile.displayName || profile.name || email;
+  const email = (profile.emails?.[0]?.value || profile.email)?.toLowerCase();
+  const displayName = profile.displayName || profile.name || email?.split('@')[0];
+  
+  if (!email) {
+    throw new Error('OAuth profile must include an email address');
+  }
   
   try {
-    // Check if user exists with this provider ID
+    // First, check if user exists with this provider ID
     let result = await query(
       'SELECT * FROM users WHERE oauth_provider = $1 AND oauth_id = $2',
       [provider, profile.id]
     );
     
     if (result.rows.length > 0) {
+      const user = result.rows[0];
+      
+      // Check if user is blocked
+      if (user.is_blocked) {
+        const error = new Error('Account is blocked');
+        error.code = 'ACCOUNT_BLOCKED';
+        error.reason = user.blocked_reason;
+        throw error;
+      }
+      
       // Update last login
       await query(
         'UPDATE users SET last_login = NOW() WHERE id = $1',
-        [result.rows[0].id]
+        [user.id]
       );
-      return result.rows[0];
+      return user;
     }
     
-    // Check if user exists with this email
+    // Check if user exists with this email (for account linking)
     result = await query(
       'SELECT * FROM users WHERE email = $1',
       [email]
     );
     
     if (result.rows.length > 0) {
+      const existingUser = result.rows[0];
+      
+      // Check if user is blocked
+      if (existingUser.is_blocked) {
+        const error = new Error('Account is blocked');
+        error.code = 'ACCOUNT_BLOCKED';
+        error.reason = existingUser.blocked_reason;
+        throw error;
+      }
+      
       // Link OAuth to existing account
+      // If user has a password, they can use both password AND SSO
+      // We update oauth_id to link this SSO account
       await query(
-        'UPDATE users SET oauth_provider = $1, oauth_id = $2, last_login = NOW() WHERE id = $3',
-        [provider, profile.id, result.rows[0].id]
+        `UPDATE users SET 
+          oauth_provider = CASE 
+            WHEN password_hash IS NOT NULL THEN COALESCE(oauth_provider, $1)
+            ELSE $1 
+          END,
+          oauth_id = $2, 
+          email_verified = true,
+          last_login = NOW(),
+          display_name = COALESCE(NULLIF(display_name, ''), $3, display_name)
+        WHERE id = $4`,
+        [provider, profile.id, displayName, existingUser.id]
       );
-      return result.rows[0];
+      
+      logger.info('OAuth account linked to existing user', { 
+        provider, 
+        email, 
+        userId: existingUser.id,
+        hadPassword: !!existingUser.password_hash
+      });
+      
+      // Fetch and return updated user
+      const updated = await query('SELECT * FROM users WHERE id = $1', [existingUser.id]);
+      return updated.rows[0];
     }
     
-    // Create new user
+    // Create new user with default role
     result = await query(
-      `INSERT INTO users (email, display_name, oauth_provider, oauth_id, email_verified, created_at, last_login)
-       VALUES ($1, $2, $3, $4, true, NOW(), NOW())
-       RETURNING *`,
+      `INSERT INTO users (
+        email, 
+        display_name, 
+        oauth_provider, 
+        oauth_id, 
+        email_verified, 
+        role,
+        created_at, 
+        last_login
+      )
+      VALUES ($1, $2, $3, $4, true, 'user', NOW(), NOW())
+      RETURNING *`,
       [email, displayName, provider, profile.id]
     );
     
-    logger.info('New OAuth user created', { provider, email });
+    logger.info('New OAuth user created', { 
+      provider, 
+      email, 
+      userId: result.rows[0].id 
+    });
     return result.rows[0];
   } catch (error) {
-    logger.error('Error in findOrCreateOAuthUser', { error: error.message, provider });
+    logger.error('Error in findOrCreateOAuthUser', { 
+      error: error.message, 
+      code: error.code,
+      provider, 
+      email 
+    });
     throw error;
   }
 };
@@ -143,6 +207,16 @@ if (isDbConfigured()) {
         }
         
         const user = result.rows[0];
+        
+        // Check if user is blocked
+        if (user.is_blocked) {
+          return done(null, false, { 
+            message: 'Account is blocked',
+            code: 'ACCOUNT_BLOCKED',
+            reason: user.blocked_reason 
+          });
+        }
+        
         const isValid = await bcrypt.compare(password, user.password_hash);
         
         if (!isValid) {
@@ -187,7 +261,7 @@ if (isValidConfig(googleClientId) && isValidConfig(googleClientSecret)) {
           const user = await findOrCreateOAuthUser('google', profile);
           return done(null, user);
         } catch (error) {
-          logger.error('Google OAuth error', { error: error.message });
+          logger.error('Google OAuth error', { error: error.message, code: error.code });
           return done(error, null);
         }
       }

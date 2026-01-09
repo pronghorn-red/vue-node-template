@@ -9,6 +9,7 @@ import PrimeVue from 'primevue/config'
 import Aura from '@primevue/themes/aura'
 import 'primeicons/primeicons.css'
 import ToastService from 'primevue/toastservice'
+import ConfirmationService from 'primevue/confirmationservice'
 import Tooltip from 'primevue/tooltip'
 import Chart from 'chart.js/auto'
 import { chartDarkModePlugin, canvasBackgroundPlugin } from './utils/chartDarkModePlugin'
@@ -49,6 +50,7 @@ app.use(PrimeVue, {
 app.use(i18n)
 app.use(router)
 app.use(ToastService)
+app.use(ConfirmationService)  
 app.directive('tooltip', Tooltip)
 
 app.mount('#app')

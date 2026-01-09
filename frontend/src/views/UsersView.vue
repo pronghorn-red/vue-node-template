@@ -10,8 +10,13 @@
           Manage user accounts, roles, and permissions
         </p>
       </div>
-      <div class="mt-4 sm:mt-0">
+      <div class="mt-4 sm:mt-0 flex gap-2 items-center">
         <Tag :value="`${pagination.total} Total Users`" severity="info" />
+        <Button 
+          label="Create User" 
+          icon="pi pi-plus" 
+          @click="openCreateDialog"
+        />
       </div>
     </div>
 
@@ -203,7 +208,7 @@
                   size="small"
                   title="Unblock User"
                   :disabled="!canModifyUser(data)"
-                  @click="handleUnblock(data)"
+                  @click="confirmUnblock(data)"
                 />
                 <Button 
                   icon="pi pi-key" 
@@ -213,7 +218,7 @@
                   size="small"
                   title="Reset Password"
                   :disabled="!canModifyUser(data)"
-                  @click="handleResetPassword(data)"
+                  @click="openResetPasswordDialog(data)"
                 />
                 <Button 
                   icon="pi pi-trash" 
@@ -223,7 +228,7 @@
                   size="small"
                   title="Delete User"
                   :disabled="!canModifyUser(data)"
-                  @click="openDeleteDialog(data)"
+                  @click="confirmDelete(data)"
                 />
               </div>
             </template>
@@ -262,6 +267,61 @@
         </div>
       </template>
     </Card>
+
+    <!-- ConfirmDialog - Required for useConfirm() -->
+    <ConfirmDialog />
+
+    <!-- Create User Dialog -->
+    <Dialog 
+      v-model:visible="createDialogVisible" 
+      header="Create New User"
+      :modal="true"
+      :style="{ width: '500px' }"
+    >
+      <div class="space-y-4">
+        <div class="field">
+          <label class="block text-sm font-medium mb-1">Email <span class="text-red-500">*</span></label>
+          <InputText v-model="createForm.email" class="w-full" placeholder="user@example.com" />
+        </div>
+        <div class="field">
+          <label class="block text-sm font-medium mb-1">Display Name <span class="text-red-500">*</span></label>
+          <InputText v-model="createForm.display_name" class="w-full" placeholder="John Doe" />
+        </div>
+        <div class="field">
+          <label class="block text-sm font-medium mb-1">Password</label>
+          <Password v-model="createForm.password" class="w-full" toggleMask placeholder="Leave empty to auto-generate" />
+          <small class="text-gray-500">Leave empty to generate a random password</small>
+        </div>
+        <div class="field">
+          <label class="block text-sm font-medium mb-1">Role</label>
+          <Select 
+            v-model="createForm.role" 
+            :options="availableRoles"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
+        </div>
+        <div class="field">
+          <label class="block text-sm font-medium mb-1">Language</label>
+          <Select 
+            v-model="createForm.language_preference" 
+            :options="languageOptions"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
+        </div>
+        <div class="field flex items-center gap-2">
+          <Checkbox v-model="createForm.email_verified" :binary="true" inputId="create_email_verified" />
+          <label for="create_email_verified">Mark email as verified</label>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" @click="createDialogVisible = false" />
+        <Button label="Create User" @click="handleCreateUser" :loading="saving" />
+      </template>
+    </Dialog>
 
     <!-- Edit User Dialog -->
     <Dialog 
@@ -346,53 +406,54 @@
       </template>
     </Dialog>
 
-    <!-- Delete Confirmation Dialog -->
+    <!-- Reset Password Dialog -->
     <Dialog 
-      v-model:visible="deleteDialogVisible" 
-      header="Delete User"
-      :modal="true"
-      :style="{ width: '400px' }"
-    >
-      <div class="flex items-start gap-4" v-if="selectedUser">
-        <div class="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center flex-shrink-0">
-          <i class="pi pi-exclamation-triangle text-2xl text-red-500"></i>
-        </div>
-        <div>
-          <p class="text-gray-700 dark:text-gray-300">
-            Are you sure you want to delete <strong>{{ selectedUser.display_name }}</strong>? This action cannot be undone.
-          </p>
-        </div>
-      </div>
-      <template #footer>
-        <Button label="Cancel" severity="secondary" @click="deleteDialogVisible = false" />
-        <Button label="Delete" severity="danger" @click="handleDelete" :loading="saving" />
-      </template>
-    </Dialog>
-
-    <!-- Password Reset Token Dialog -->
-    <Dialog 
-      v-model:visible="resetTokenDialogVisible" 
-      header="Password Reset Token"
+      v-model:visible="resetPasswordDialogVisible" 
+      header="Reset User Password"
       :modal="true"
       :style="{ width: '500px' }"
     >
-      <div v-if="resetTokenData">
-        <p class="mb-4 text-sm text-gray-600 dark:text-gray-400">
-          Share this link with the user to reset their password. It expires in 24 hours.
-        </p>
-        <div class="field">
-          <label class="block text-sm font-medium mb-1">Reset URL</label>
-          <div class="flex gap-2">
-            <InputText :value="resetTokenData.resetUrl" readonly class="w-full font-mono text-sm" />
-            <Button icon="pi pi-copy" severity="secondary" @click="copyResetUrl" title="Copy" />
+      <div v-if="selectedUser">
+        <p class="mb-4">Reset password for <strong>{{ selectedUser.display_name }}</strong> ({{ selectedUser.email }})</p>
+        
+        <div class="space-y-4">
+          <div class="flex gap-4">
+            <div class="flex items-center gap-2">
+              <RadioButton v-model="resetPasswordMode" inputId="mode_generate" value="generate" />
+              <label for="mode_generate">Generate random password</label>
+            </div>
+            <div class="flex items-center gap-2">
+              <RadioButton v-model="resetPasswordMode" inputId="mode_set" value="set" />
+              <label for="mode_set">Set specific password</label>
+            </div>
+          </div>
+          
+          <div v-if="resetPasswordMode === 'set'" class="field">
+            <label class="block text-sm font-medium mb-1">New Password</label>
+            <Password v-model="newPasswordValue" class="w-full" toggleMask />
           </div>
         </div>
-        <div class="mt-2 text-sm text-gray-500">
-          Expires: {{ formatDate(resetTokenData.expiresAt) }}
+        
+        <!-- Show generated password -->
+        <div v-if="generatedPassword" class="mt-4 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
+          <p class="text-sm font-medium text-green-800 dark:text-green-300 mb-2">
+            Password has been reset! Share this securely with the user:
+          </p>
+          <div class="flex gap-2">
+            <InputText :value="generatedPassword" readonly class="w-full font-mono" />
+            <Button icon="pi pi-copy" severity="secondary" @click="copyPassword" title="Copy" />
+          </div>
         </div>
       </div>
       <template #footer>
-        <Button label="Close" @click="resetTokenDialogVisible = false" />
+        <Button label="Close" severity="secondary" @click="closeResetPasswordDialog" />
+        <Button 
+          v-if="!generatedPassword"
+          label="Reset Password" 
+          severity="warning" 
+          @click="handleResetPassword" 
+          :loading="saving" 
+        />
       </template>
     </Dialog>
   </div>
@@ -400,6 +461,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useConfirm } from 'primevue/useconfirm'
 import { useUsers } from '@/composables/useUsers'
 import { useAuth } from '@/composables/useAuth'
 import Card from 'primevue/card'
@@ -412,12 +474,16 @@ import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import Avatar from 'primevue/avatar'
 import Dialog from 'primevue/dialog'
+import ConfirmDialog from 'primevue/confirmdialog'
 import Checkbox from 'primevue/checkbox'
 import Chips from 'primevue/chips'
+import Password from 'primevue/password'
+import RadioButton from 'primevue/radiobutton'
 import Message from 'primevue/message'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 
+const confirm = useConfirm()
 const { user: currentUser } = useAuth()
 const {
   users,
@@ -426,12 +492,13 @@ const {
   error,
   clearError,
   listUsers,
+  createUser,
   updateUser,
   updateUserRole,
   blockUser,
   unblockUser,
   deleteUser,
-  generateResetToken,
+  resetUserPassword,
   getUserInitials,
   getRoleLabel,
   getRoleLevel,
@@ -447,18 +514,28 @@ const saving = ref(false)
 const successMessage = ref('')
 
 // Dialog visibility
+const createDialogVisible = ref(false)
 const editDialogVisible = ref(false)
 const roleDialogVisible = ref(false)
 const blockDialogVisible = ref(false)
-const deleteDialogVisible = ref(false)
-const resetTokenDialogVisible = ref(false)
+const resetPasswordDialogVisible = ref(false)
 
 // Selected user and forms
 const selectedUser = ref(null)
+const createForm = ref({ 
+  email: '', 
+  display_name: '', 
+  password: '', 
+  role: 'user', 
+  language_preference: 'en',
+  email_verified: false 
+})
 const editForm = ref({ display_name: '', language_preference: 'en', email_verified: false })
 const roleForm = ref({ role: 'user', additional_roles: [] })
 const blockReason = ref('')
-const resetTokenData = ref(null)
+const resetPasswordMode = ref('generate')
+const newPasswordValue = ref('')
+const generatedPassword = ref('')
 
 // Options
 const roleOptions = [
@@ -484,9 +561,7 @@ const availableRoles = computed(() => {
   const currentLevel = getRoleLevel(currentUser.value?.role)
   const roles = []
   
-  if (currentLevel > getRoleLevel('superadmin')) {
-    roles.push({ label: 'Super Admin', value: 'superadmin' })
-  }
+  // Can only assign roles lower than your own
   if (currentLevel > getRoleLevel('admin')) {
     roles.push({ label: 'Admin', value: 'admin' })
   }
@@ -539,6 +614,18 @@ const changePage = (page) => {
 }
 
 // Dialog handlers
+const openCreateDialog = () => {
+  createForm.value = { 
+    email: '', 
+    display_name: '', 
+    password: '', 
+    role: 'user', 
+    language_preference: 'en',
+    email_verified: false 
+  }
+  createDialogVisible.value = true
+}
+
 const openEditDialog = (user) => {
   selectedUser.value = user
   editForm.value = {
@@ -564,12 +651,93 @@ const openBlockDialog = (user) => {
   blockDialogVisible.value = true
 }
 
-const openDeleteDialog = (user) => {
+const openResetPasswordDialog = (user) => {
   selectedUser.value = user
-  deleteDialogVisible.value = true
+  resetPasswordMode.value = 'generate'
+  newPasswordValue.value = ''
+  generatedPassword.value = ''
+  resetPasswordDialogVisible.value = true
+}
+
+const closeResetPasswordDialog = () => {
+  resetPasswordDialogVisible.value = false
+  generatedPassword.value = ''
+}
+
+// Confirm dialogs using useConfirm
+const confirmDelete = (user) => {
+  confirm.require({
+    message: `Are you sure you want to delete ${user.display_name}? This action cannot be undone.`,
+    header: 'Delete User',
+    icon: 'pi pi-exclamation-triangle',
+    rejectClass: 'p-button-secondary p-button-outlined',
+    rejectLabel: 'Cancel',
+    acceptClass: 'p-button-danger',
+    acceptLabel: 'Delete',
+    accept: async () => {
+      saving.value = true
+      try {
+        await deleteUser(user.id)
+        successMessage.value = 'User deleted successfully'
+        loadUsers()
+      } catch (err) {
+        console.error('Failed to delete user:', err)
+      } finally {
+        saving.value = false
+      }
+    }
+  })
+}
+
+const confirmUnblock = (user) => {
+  confirm.require({
+    message: `Are you sure you want to unblock ${user.display_name}?`,
+    header: 'Unblock User',
+    icon: 'pi pi-question-circle',
+    rejectClass: 'p-button-secondary p-button-outlined',
+    rejectLabel: 'Cancel',
+    acceptClass: 'p-button-success',
+    acceptLabel: 'Unblock',
+    accept: async () => {
+      saving.value = true
+      try {
+        await unblockUser(user.id)
+        successMessage.value = 'User unblocked successfully'
+        loadUsers()
+      } catch (err) {
+        console.error('Failed to unblock user:', err)
+      } finally {
+        saving.value = false
+      }
+    }
+  })
 }
 
 // Action handlers
+const handleCreateUser = async () => {
+  if (!createForm.value.email || !createForm.value.display_name) {
+    return
+  }
+  saving.value = true
+  try {
+    const result = await createUser(createForm.value)
+    
+    // Show the temporary password if one was generated
+    if (result.temporaryPassword) {
+      successMessage.value = `User created! Temporary password: ${result.temporaryPassword}`
+    } else {
+      successMessage.value = 'User created successfully'
+    }
+    
+    createDialogVisible.value = false
+    loadUsers()
+  } catch (err) {
+    console.error('Failed to create user:', err)
+  } finally {
+    saving.value = false
+  }
+}
+
 const handleEditUser = async () => {
   if (!selectedUser.value) return
   saving.value = true
@@ -615,52 +783,26 @@ const handleBlock = async () => {
   }
 }
 
-const handleUnblock = async (user) => {
-  saving.value = true
-  try {
-    await unblockUser(user.id)
-    successMessage.value = 'User unblocked successfully'
-    loadUsers()
-  } catch (err) {
-    console.error('Failed to unblock user:', err)
-  } finally {
-    saving.value = false
-  }
-}
-
-const handleDelete = async () => {
+const handleResetPassword = async () => {
   if (!selectedUser.value) return
   saving.value = true
   try {
-    await deleteUser(selectedUser.value.id)
-    successMessage.value = 'User deleted successfully'
-    deleteDialogVisible.value = false
-    loadUsers()
+    const password = resetPasswordMode.value === 'set' ? newPasswordValue.value : null
+    const result = await resetUserPassword(selectedUser.value.id, password)
+    generatedPassword.value = result.temporaryPassword
+    successMessage.value = 'Password reset successfully'
   } catch (err) {
-    console.error('Failed to delete user:', err)
+    console.error('Failed to reset password:', err)
   } finally {
     saving.value = false
   }
 }
 
-const handleResetPassword = async (user) => {
-  saving.value = true
-  try {
-    const result = await generateResetToken(user.id)
-    resetTokenData.value = result
-    resetTokenDialogVisible.value = true
-  } catch (err) {
-    console.error('Failed to generate reset token:', err)
-  } finally {
-    saving.value = false
-  }
-}
-
-const copyResetUrl = async () => {
-  if (resetTokenData.value?.resetUrl) {
+const copyPassword = async () => {
+  if (generatedPassword.value) {
     try {
-      await navigator.clipboard.writeText(resetTokenData.value.resetUrl)
-      successMessage.value = 'Reset URL copied to clipboard'
+      await navigator.clipboard.writeText(generatedPassword.value)
+      successMessage.value = 'Password copied to clipboard'
     } catch (err) {
       console.error('Failed to copy:', err)
     }
@@ -717,7 +859,12 @@ onMounted(() => {
 :deep(.p-inputtext),
 :deep(.p-select),
 :deep(.p-textarea),
-:deep(.p-chips) {
+:deep(.p-chips),
+:deep(.p-password input) {
   @apply bg-white dark:bg-slate-700 border-gray-300 dark:border-slate-600;
+}
+
+:deep(.p-password) {
+  @apply w-full;
 }
 </style>
