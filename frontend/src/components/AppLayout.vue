@@ -455,7 +455,7 @@ const navigateFromMenu = (path) => {
 const handleSignOut = () => {
   userMenuVisible.value = false
   signOut()
-  router.push('/auth')
+  router.push('/')
 }
 
 const goToAuth = () => {

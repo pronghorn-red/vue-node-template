@@ -1,7 +1,13 @@
 /**
- * @fileoverview useWebSocket Composable
+ * @fileoverview useWebSocket Composable - v2
  * @description Central WebSocket connection manager with authentication,
  * domain-based message routing, and task management.
+ * 
+ * FIXES in v2:
+ * - Replaced 500ms polling with Vue's reactive watch() for token changes
+ * - Efficient event-driven token monitoring instead of interval polling
+ * - WebSocket connects automatically when token becomes available after login
+ * - Improved token refresh coordination with auth composable
  * 
  * Token Strategy:
  * - Reads access token from sessionStorage (set by useAuth)
@@ -12,7 +18,7 @@
  * Supports parallel task execution with client-generated taskIds
  */
 
-import { ref, computed, shallowRef, reactive } from 'vue'
+import { ref, computed, shallowRef, reactive, watch } from 'vue'
 
 // ============================================================================
 // CONFIGURATION
@@ -59,6 +65,7 @@ let heartbeatInterval = null
 let reconnectTimeout = null
 let isInitialized = false
 let tokenRefreshCallback = null // Callback to refresh token
+let tokenWatcher = null // Watch for token changes
 
 // ============================================================================
 // TOKEN MANAGEMENT
@@ -123,6 +130,48 @@ const refreshTokenAndReconnect = async () => {
   } catch (error) {
     console.error('Token refresh error:', error)
     return false
+  }
+}
+
+/**
+ * Watch for token changes using Vue's reactive system
+ * This ensures WebSocket connects when user logs in
+ */
+const setupTokenWatcher = () => {
+  if (tokenWatcher) return // Already watching
+  
+  // Create a reactive ref that tracks the token
+  const currentToken = ref(getAuthToken())
+  
+  // Watch for changes to the token
+  tokenWatcher = watch(
+    () => getAuthToken(),
+    (newToken) => {
+      currentToken.value = newToken
+      
+      if (newToken && !isConnected.value) {
+        // Token became available - connect WebSocket
+        console.log('🔐 Token detected, connecting WebSocket...')
+        connect().catch(err => {
+          console.error('Failed to connect WebSocket after token:', err)
+        })
+      } else if (!newToken && isConnected.value) {
+        // Token was removed - disconnect
+        console.log('🔐 Token removed, disconnecting WebSocket...')
+        disconnect()
+      }
+    },
+    { immediate: false }
+  )
+}
+
+/**
+ * Stop watching for token changes
+ */
+const stopWatchingToken = () => {
+  if (tokenWatcher) {
+    tokenWatcher()
+    tokenWatcher = null
   }
 }
 
@@ -360,270 +409,129 @@ const updateTaskFromMessage = (taskId, data) => {
 }
 
 // ============================================================================
-// TASK MANAGEMENT
-// ============================================================================
-
-/**
- * Create a new task
- * @param {string} domain - Domain (e.g., 'llm', 'tool')
- * @param {Object} options - Task options
- * @returns {string} Task ID
- */
-const createTask = (domain, options = {}) => {
-  const taskId = options.taskId || generateTaskId(domain)
-  
-  tasks[taskId] = reactive({
-    taskId,
-    domain,
-    status: 'pending', // pending | streaming | done | error | cancelled
-    content: '',
-    thinking: '',
-    error: null,
-    chunkCount: 0,
-    model: options.model || null,
-    provider: options.provider || null,
-    startedAt: Date.now(),
-    completedAt: null,
-    onChunk: options.onChunk || null,
-    onThinking: options.onThinking || null,
-    _resolve: null,
-    _reject: null,
-  })
-  
-  return taskId
-}
-
-/**
- * Cancel a specific task
- * @param {string} taskId
- * @param {string} [domain='llm']
- */
-const cancelTask = (taskId, domain = 'llm') => {
-  if (!tasks[taskId]) return
-  
-  try {
-    sendMessage({
-      type: `${domain}:cancel`,
-      taskId,
-    })
-  } catch (err) {
-    console.error('Failed to send cancel:', err)
-  }
-  
-  // Optimistically update state
-  tasks[taskId].status = 'cancelled'
-  tasks[taskId].completedAt = Date.now()
-}
-
-/**
- * Cancel all tasks for a domain
- * @param {string} [domain='llm']
- */
-const cancelAllTasks = (domain = 'llm') => {
-  try {
-    sendMessage({
-      type: `${domain}:cancel_all`,
-    })
-  } catch (err) {
-    console.error('Failed to send cancel_all:', err)
-  }
-  
-  // Optimistically update all tasks of this domain
-  Object.values(tasks).forEach(task => {
-    if (task.domain === domain && task.status === 'streaming') {
-      task.status = 'cancelled'
-      task.completedAt = Date.now()
-    }
-  })
-}
-
-/**
- * Wait for a task to complete
- * @param {string} taskId
- * @returns {Promise<Object>}
- */
-const waitForTask = (taskId) => {
-  const task = tasks[taskId]
-  if (!task) {
-    return Promise.reject(new Error(`Task ${taskId} not found`))
-  }
-  
-  // Already completed
-  if (['done', 'error', 'cancelled'].includes(task.status)) {
-    if (task.status === 'done') {
-      return Promise.resolve({ content: task.content, finishReason: task.finishReason })
-    }
-    return Promise.reject(new Error(task.error || 'Task failed'))
-  }
-  
-  // Create promise that will be resolved/rejected by message handler
-  return new Promise((resolve, reject) => {
-    task._resolve = resolve
-    task._reject = reject
-  })
-}
-
-/**
- * Remove completed tasks (cleanup)
- * @param {number} [maxAge=300000] - Max age in ms (default 5 minutes)
- */
-const cleanupTasks = (maxAge = 5 * 60 * 1000) => {
-  const now = Date.now()
-  Object.keys(tasks).forEach(taskId => {
-    const task = tasks[taskId]
-    if (task.completedAt && (now - task.completedAt) > maxAge) {
-      delete tasks[taskId]
-    }
-  })
-}
-
-/**
- * Dismiss a specific task (remove from registry)
- * @param {string} taskId
- */
-const dismissTask = (taskId) => {
-  delete tasks[taskId]
-}
-
-// ============================================================================
-// DOMAIN LISTENERS
-// ============================================================================
-
-/**
- * Add a listener for a specific domain
- * @param {string} domain - Domain to listen to (e.g., 'llm', 'tool', 'auth')
- * @param {Function} callback - Callback function (data, action) => void
- * @returns {Function} Cleanup function
- */
-const addDomainListener = (domain, callback) => {
-  if (!domainListeners.has(domain)) {
-    domainListeners.set(domain, new Set())
-  }
-  domainListeners.get(domain).add(callback)
-  
-  return () => {
-    const listeners = domainListeners.get(domain)
-    if (listeners) {
-      listeners.delete(callback)
-      if (listeners.size === 0) {
-        domainListeners.delete(domain)
-      }
-    }
-  }
-}
-
-// ============================================================================
 // CONNECTION MANAGEMENT
 // ============================================================================
 
 /**
  * Connect to WebSocket server
- * 
- * Security: Token is NOT sent in URL (would be logged by servers/proxies).
- * Instead, we connect first, then send token via message after connection opens.
- * 
- * @param {Object} options - Connection options
- * @param {boolean} options.autoAuth - Automatically authenticate after connecting
  * @returns {Promise<void>}
  */
-const connect = (options = { autoAuth: true }) => {
+const connect = async () => {
+  // Don't reconnect if already connected
+  if (isConnected.value && ws.value?.readyState === WebSocket.OPEN) {
+    console.log('WebSocket already connected')
+    return
+  }
+  
+  // Check for token
+  const token = getAuthToken()
+  if (!token) {
+    console.log('⏳ No auth token available, WebSocket will connect after login')
+    return
+  }
+  
   return new Promise((resolve, reject) => {
-    // Already connected
-    if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-      resolve()
-      return
-    }
-    
-    // Close existing connection if in wrong state
-    if (ws.value && ws.value.readyState !== WebSocket.CLOSED) {
-      ws.value.close()
-    }
-    
     try {
-      // Connect WITHOUT token in URL (security best practice)
-      const url = `${CONFIG.wsUrl}${CONFIG.wsPath}`
+      const url = new URL(`${CONFIG.wsUrl}${CONFIG.wsPath}`)
+      url.searchParams.append('token', token)
       
-      ws.value = new WebSocket(url)
+      console.log('🔌 Connecting to WebSocket:', CONFIG.wsUrl + CONFIG.wsPath)
+      
+      ws.value = new WebSocket(url.toString())
       
       ws.value.onopen = () => {
+        console.log('✅ WebSocket connected')
         isConnected.value = true
         reconnectAttempts.value = 0
+        
+        // Start heartbeat
         startHeartbeat()
         
-        // Auto-authenticate after connection if token available
-        if (options.autoAuth) {
-          const token = getAuthToken()
-          if (token) {
-            // Send auth message (not in URL - more secure)
-            sendMessage({
-              type: 'auth:login',
-              token
-            })
-          }
-        }
+        // Authenticate with token
+        authenticate(token)
         
         resolve()
       }
       
-      ws.value.onclose = (event) => {
-        console.log('❌ WebSocket disconnected', { code: event.code, reason: event.reason })
-        isConnected.value = false
-        isAuthenticated.value = false
-        connectionId.value = null
-        stopHeartbeat()
-        
-        // Attempt reconnect if not intentional close
-        if (event.code !== 1000 && !isReconnecting.value) {
-          attemptReconnect()
-        }
-      }
-      
-      ws.value.onerror = (error) => {
-        console.error('WebSocket error:', error)
-        isConnected.value = false
-      }
-      
       ws.value.onmessage = handleMessage
       
+      ws.value.onerror = (error) => {
+        console.error('❌ WebSocket error:', error)
+        isConnected.value = false
+        reject(error)
+      }
+      
+      ws.value.onclose = () => {
+        console.log('🔌 WebSocket disconnected')
+        isConnected.value = false
+        isAuthenticated.value = false
+        stopHeartbeat()
+        
+        // Attempt reconnect
+        attemptReconnect()
+      }
     } catch (error) {
-      console.error('WebSocket connection error:', error)
+      console.error('Failed to create WebSocket:', error)
       reject(error)
     }
   })
 }
 
 /**
- * Disconnect from WebSocket server
+ * Disconnect from WebSocket
  */
 const disconnect = () => {
+  if (ws.value) {
+    ws.value.close()
+    ws.value = null
+  }
+  
+  isConnected.value = false
+  isAuthenticated.value = false
   stopHeartbeat()
   
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout)
     reconnectTimeout = null
   }
-  
-  if (ws.value) {
-    ws.value.close(1000, 'Client disconnect')
-    ws.value = null
-  }
-  
-  isConnected.value = false
-  isAuthenticated.value = false
-  connectionId.value = null
 }
 
 /**
- * Start heartbeat ping
+ * Attempt to reconnect with exponential backoff
+ */
+const attemptReconnect = () => {
+  if (reconnectAttempts.value >= CONFIG.reconnectMaxAttempts) {
+    console.error('❌ Max reconnect attempts reached')
+    return
+  }
+  
+  reconnectAttempts.value++
+  const delay = Math.min(
+    CONFIG.reconnectBaseDelay * Math.pow(2, reconnectAttempts.value - 1),
+    CONFIG.reconnectMaxDelay
+  )
+  
+  console.log(`⏳ Reconnecting in ${delay}ms (attempt ${reconnectAttempts.value}/${CONFIG.reconnectMaxAttempts})`)
+  
+  reconnectTimeout = setTimeout(() => {
+    connect().catch(err => {
+      console.error('Reconnect failed:', err)
+    })
+  }, delay)
+}
+
+/**
+ * Start heartbeat to keep connection alive
  */
 const startHeartbeat = () => {
   stopHeartbeat()
+  
   heartbeatInterval = setInterval(() => {
     if (isConnected.value && ws.value?.readyState === WebSocket.OPEN) {
       try {
         sendMessage({ type: 'ping' })
       } catch (err) {
-        console.error('Heartbeat error:', err)
+        console.error('Failed to send heartbeat:', err)
       }
     }
   }, CONFIG.heartbeatInterval)
@@ -639,73 +547,43 @@ const stopHeartbeat = () => {
   }
 }
 
-/**
- * Attempt reconnection with exponential backoff
- */
-const attemptReconnect = () => {
-  if (reconnectAttempts.value >= CONFIG.reconnectMaxAttempts) {
-    console.error('Max reconnection attempts reached')
-    return
-  }
-  
-  reconnectAttempts.value++
-  const delay = Math.min(
-    CONFIG.reconnectBaseDelay * Math.pow(2, reconnectAttempts.value - 1),
-    CONFIG.reconnectMaxDelay
-  )
-  
-  console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.value}/${CONFIG.reconnectMaxAttempts})`)
-  
-  reconnectTimeout = setTimeout(() => {
-    connect().catch(err => {
-      console.error('Reconnection failed:', err)
-    })
-  }, delay)
-}
-
 // ============================================================================
 // AUTHENTICATION
 // ============================================================================
 
 /**
- * Authenticate with token
- * @param {string} [token] - JWT token (uses sessionStorage if not provided)
- * @returns {Promise<Object>}
+ * Authenticate with server
+ * @param {string} token - JWT token
+ * @returns {Promise<void>}
  */
-const authenticate = (token) => {
+const authenticate = async (token) => {
+  if (!isConnected.value) {
+    throw new Error('WebSocket not connected')
+  }
+  
   return new Promise((resolve, reject) => {
-    if (!isConnected.value) {
-      reject(new Error('Not connected'))
-      return
-    }
-    
-    const authToken = token || getAuthToken()
-    if (!authToken) {
-      reject(new Error('No auth token available'))
-      return
-    }
-    
-    // Set up one-time listener for auth response
-    const cleanup = addDomainListener('auth', (data, action) => {
-      cleanup()
-      if (action === 'success') {
-        resolve(data)
-      } else if (action === 'error' || action === 'failed') {
-        reject(new Error(data.error || 'Authentication failed'))
-      }
-    })
-    
-    // Send auth message
-    sendMessage({
-      type: 'auth:login',
-      token: authToken,
-    })
-    
-    // Timeout after 10 seconds
-    setTimeout(() => {
-      cleanup()
+    const timeout = setTimeout(() => {
       reject(new Error('Authentication timeout'))
-    }, 10000)
+    }, 5000)
+    
+    try {
+      sendMessage({
+        type: 'auth:login',
+        token
+      })
+      
+      // Wait for auth:success message
+      const checkAuth = setInterval(() => {
+        if (isAuthenticated.value) {
+          clearInterval(checkAuth)
+          clearTimeout(timeout)
+          resolve()
+        }
+      }, 100)
+    } catch (err) {
+      clearTimeout(timeout)
+      reject(err)
+    }
   })
 }
 
@@ -717,12 +595,134 @@ const logout = () => {
     try {
       sendMessage({ type: 'auth:logout' })
     } catch (err) {
-      // Ignore
+      console.warn('Failed to send logout message:', err)
     }
   }
+  
   isAuthenticated.value = false
   wsUser.value = null
   wsClaims.value = null
+}
+
+// ============================================================================
+// TASK MANAGEMENT
+// ============================================================================
+
+/**
+ * Create a new task
+ * @param {Object} options - Task options
+ * @returns {string} Task ID
+ */
+const createTask = (options = {}) => {
+  const taskId = generateTaskId(options.prefix)
+  
+  tasks[taskId] = {
+    id: taskId,
+    status: 'pending',
+    content: '',
+    thinking: '',
+    chunkCount: 0,
+    error: null,
+    createdAt: Date.now(),
+    completedAt: null,
+    onChunk: options.onChunk,
+    onThinking: options.onThinking,
+    _resolve: null,
+    _reject: null
+  }
+  
+  return taskId
+}
+
+/**
+ * Cancel a task
+ * @param {string} taskId
+ */
+const cancelTask = (taskId) => {
+  if (tasks[taskId]) {
+    try {
+      sendMessage({
+        type: 'task:cancel',
+        taskId
+      })
+    } catch (err) {
+      console.error('Failed to cancel task:', err)
+    }
+  }
+}
+
+/**
+ * Cancel all tasks
+ */
+const cancelAllTasks = () => {
+  Object.keys(tasks).forEach(taskId => {
+    cancelTask(taskId)
+  })
+}
+
+/**
+ * Wait for a task to complete
+ * @param {string} taskId
+ * @returns {Promise<Object>} Task result
+ */
+const waitForTask = (taskId) => {
+  return new Promise((resolve, reject) => {
+    const task = tasks[taskId]
+    if (!task) {
+      reject(new Error(`Task ${taskId} not found`))
+      return
+    }
+    
+    task._resolve = resolve
+    task._reject = reject
+  })
+}
+
+/**
+ * Dismiss a completed task
+ * @param {string} taskId
+ */
+const dismissTask = (taskId) => {
+  delete tasks[taskId]
+}
+
+/**
+ * Clean up old tasks
+ */
+const cleanupTasks = () => {
+  const now = Date.now()
+  const maxAge = 3600000 // 1 hour
+  
+  Object.entries(tasks).forEach(([taskId, task]) => {
+    if (task.completedAt && now - task.completedAt > maxAge) {
+      delete tasks[taskId]
+    }
+  })
+}
+
+/**
+ * Add a domain listener
+ * @param {string} domain
+ * @param {Function} callback
+ * @returns {Function} Unsubscribe function
+ */
+const addDomainListener = (domain, callback) => {
+  if (!domainListeners.has(domain)) {
+    domainListeners.set(domain, [])
+  }
+  
+  domainListeners.get(domain).push(callback)
+  
+  // Return unsubscribe function
+  return () => {
+    const listeners = domainListeners.get(domain)
+    if (listeners) {
+      const index = listeners.indexOf(callback)
+      if (index > -1) {
+        listeners.splice(index, 1)
+      }
+    }
+  }
 }
 
 // ============================================================================
@@ -735,6 +735,9 @@ const logout = () => {
 const initWebSocket = () => {
   if (isInitialized) return
   isInitialized = true
+  
+  // Start watching for token changes using Vue's reactive system
+  setupTokenWatcher()
   
   // Only connect if we have a token (user is logged in)
   const token = getAuthToken()

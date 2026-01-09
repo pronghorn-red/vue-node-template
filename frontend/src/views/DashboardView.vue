@@ -1,4 +1,4 @@
-<!-- src/views/DashboardView.vue -->
+<!-- src/views/DashboardView.vue - v3 -->
 <template>
   <div class="space-y-6">
     <!-- Header Section -->
@@ -89,11 +89,20 @@
           </div>
         </template>
         <template #content>
-          <Chart :key="chartKey" type="line" :data="chartData" :options="chartOptions" :aria-label="$t('accessibility.chart')" />
+          <div class="chart-container">
+            <Chart 
+              v-if="chartDataReady" 
+              :key="'line-' + chartKey" 
+              type="line" 
+              :data="chartData" 
+              :options="lineChartOptions" 
+              :aria-label="$t('accessibility.chart')" 
+            />
+          </div>
         </template>
       </Card>
 
-      <!-- Pie Chart -->
+      <!-- Doughnut Chart -->
       <Card class="card-base">
         <template #header>
           <div class="p-4 border-b border-primary">
@@ -101,7 +110,16 @@
           </div>
         </template>
         <template #content>
-          <Chart :key="chartKey" type="doughnut" :data="pieChartData" :options="chartOptions" :aria-label="$t('accessibility.chart')" />
+          <div class="chart-container">
+            <Chart 
+              v-if="chartDataReady" 
+              :key="'doughnut-' + chartKey" 
+              type="doughnut" 
+              :data="pieChartData" 
+              :options="doughnutChartOptions" 
+              :aria-label="$t('accessibility.chart')" 
+            />
+          </div>
         </template>
       </Card>
     </div>
@@ -192,28 +210,24 @@
       </template>
       <template #content>
         <Accordion :value="activeAccordion" @update:value="activeAccordion = $event">
-          <AccordionPanel header="How do I get started?" value="0">
+          <AccordionPanel :header="$t('dashboard.faqGetStarted')" value="0">
             <p class="text-secondary">
-              To get started, navigate to the documentation section and follow the setup guide. 
-              Our team is here to help if you need any assistance.
+              {{ $t('dashboard.faqGetStartedDesc') }}
             </p>
           </AccordionPanel>
-          <AccordionPanel header="What features are included?" value="1">
+          <AccordionPanel :header="$t('dashboard.faqFeatures')" value="1">
             <p class="text-secondary">
-              This dashboard includes real-time analytics, data visualization, transaction management, 
-              and comprehensive reporting tools to help you manage your business efficiently.
+              {{ $t('dashboard.faqFeaturesDesc') }}
             </p>
           </AccordionPanel>
-          <AccordionPanel header="How can I customize the dashboard?" value="2">
+          <AccordionPanel :header="$t('dashboard.faqCustomize')" value="2">
             <p class="text-secondary">
-              You can customize the dashboard by modifying the components, adding new widgets, 
-              and adjusting the layout to match your specific needs.
+              {{ $t('dashboard.faqCustomizeDesc') }}
             </p>
           </AccordionPanel>
-          <AccordionPanel header="Is there API documentation?" value="3">
+          <AccordionPanel :header="$t('dashboard.faqAPI')" value="3">
             <p class="text-secondary">
-              Yes, comprehensive API documentation is available in our developer portal. 
-              You can access it through the main menu under "Documentation".
+              {{ $t('dashboard.faqAPIDesc') }}
             </p>
           </AccordionPanel>
         </Accordion>
@@ -229,26 +243,26 @@
       </template>
       <template #content>
         <Tabs :value="activeTab" @update:value="activeTab = $event">
-          <TabPanel header="Overview" value="0">
+          <TabPanel :header="$t('dashboard.overview')" value="0">
             <div class="space-y-4">
               <p class="text-secondary">
-                This is your main dashboard overview. Here you can see all your key metrics and performance indicators.
+                {{ $t('dashboard.welcome') }}
               </p>
               <Button :label="$t('common.next')" icon="pi pi-arrow-right" class="focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900" />
             </div>
           </TabPanel>
-          <TabPanel header="Analytics" value="1">
+          <TabPanel :header="$t('dashboard.analytics')" value="1">
             <div class="space-y-4">
               <p class="text-secondary">
-                Detailed analytics and insights about your business performance and user behavior.
+                {{ $t('dashboard.recentActivity') }}
               </p>
               <Button :label="$t('common.next')" icon="pi pi-arrow-right" class="focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900" />
             </div>
           </TabPanel>
-          <TabPanel header="Settings" value="2">
+          <TabPanel :header="$t('common.settings')" value="2">
             <div class="space-y-4">
               <p class="text-secondary">
-                Configure your dashboard preferences, notifications, and other settings.
+                {{ $t('common.settings') }}
               </p>
               <Button :label="$t('common.next')" icon="pi pi-arrow-right" class="focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900" />
             </div>
@@ -300,7 +314,7 @@
       </template>
     </Card>
 
-    <!-- Message Section -->
+    <!-- Messages Section -->
     <Card class="card-base">
       <template #header>
         <div class="p-4 border-b border-primary">
@@ -309,101 +323,89 @@
       </template>
       <template #content>
         <div class="space-y-3">
-          <Message severity="info" text="New features are available. Check the documentation for details." />
-          <Message severity="success" text="Your data has been successfully synced." />
-          <Message severity="warning" text="Please update your profile information." />
-          <Message severity="error" text="An error occurred. Please try again later." />
+          <Message severity="info" :text="$t('dashboard.welcome')" />
+          <Message severity="success" text="All systems operational" />
+          <Message severity="warning" text="Please update your profile" />
         </div>
       </template>
     </Card>
 
-    <!-- Progress & Rating Section -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <Card class="card-base">
-        <template #header>
-          <div class="p-4 border-b border-primary">
-            <h3 class="text-lg font-semibold text-primary">{{ $t('dashboard.projectProgress') }}</h3>
+    <!-- Progress Section -->
+    <Card class="card-base">
+      <template #header>
+        <div class="p-4 border-b border-primary">
+          <h2 class="text-lg font-semibold text-primary">{{ $t('dashboard.projectProgress') }}</h2>
+        </div>
+      </template>
+      <template #content>
+        <div class="space-y-4">
+          <div>
+            <div class="flex justify-between mb-2">
+              <span class="text-secondary font-medium">{{ $t('dashboard.development') }}</span>
+              <span class="text-primary font-semibold">75%</span>
+            </div>
+            <ProgressBar :value="75" />
           </div>
-        </template>
-        <template #content>
-          <div class="space-y-4">
-            <div>
-              <div class="flex justify-between mb-2">
-                <label class="text-secondary text-sm font-medium">{{ $t('dashboard.development') }}</label>
-                <span class="text-primary font-semibold text-sm">75%</span>
-              </div>
-              <ProgressBar :value="75" aria-label="Development progress" />
+          <div>
+            <div class="flex justify-between mb-2">
+              <span class="text-secondary font-medium">{{ $t('dashboard.testing') }}</span>
+              <span class="text-primary font-semibold">60%</span>
             </div>
-            <div>
-              <div class="flex justify-between mb-2">
-                <label class="text-secondary text-sm font-medium">{{ $t('dashboard.testing') }}</label>
-                <span class="text-primary font-semibold text-sm">50%</span>
-              </div>
-              <ProgressBar :value="50" aria-label="Testing progress" />
-            </div>
-            <div>
-              <div class="flex justify-between mb-2">
-                <label class="text-secondary text-sm font-medium">{{ $t('dashboard.deployment') }}</label>
-                <span class="text-primary font-semibold text-sm">90%</span>
-              </div>
-              <ProgressBar :value="90" aria-label="Deployment progress" />
-            </div>
+            <ProgressBar :value="60" />
           </div>
-        </template>
-      </Card>
+          <div>
+            <div class="flex justify-between mb-2">
+              <span class="text-secondary font-medium">{{ $t('dashboard.deployment') }}</span>
+              <span class="text-primary font-semibold">40%</span>
+            </div>
+            <ProgressBar :value="40" />
+          </div>
+        </div>
+      </template>
+    </Card>
 
-      <Card class="card-base">
-        <template #header>
-          <div class="p-4 border-b border-primary">
-            <h3 class="text-lg font-semibold text-primary">{{ $t('dashboard.userSatisfaction') }}</h3>
+    <!-- Rating Section -->
+    <Card class="card-base">
+      <template #header>
+        <div class="p-4 border-b border-primary">
+          <h2 class="text-lg font-semibold text-primary">{{ $t('dashboard.userSatisfaction') }}</h2>
+        </div>
+      </template>
+      <template #content>
+        <div class="flex items-center gap-4">
+          <div>
+            <p class="text-secondary mb-3">{{ $t('dashboard.averageRating') }}</p>
+            <Rating v-model="userRating" :cancel="false" />
           </div>
-        </template>
-        <template #content>
-          <div class="flex flex-col items-center justify-center py-6">
-            <fieldset class="flex flex-col items-center">
-              <legend class="sr-only">{{ $t('dashboard.userSatisfaction') }}</legend>
-              <Rating v-model="userRating" :cancel="false" class="focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900" aria-label="User satisfaction rating" />
-            </fieldset>
-            <p class="text-secondary text-sm mt-4 font-medium">{{ $t('dashboard.averageRating') }}: 4.5/5</p>
-            <p class="text-xs text-secondary mt-2">{{ $t('dashboard.basedOn') }} 1,234 {{ $t('dashboard.reviews') }}</p>
+          <div>
+            <p class="text-3xl font-bold text-primary">{{ userRating }}.0</p>
+            <p class="text-secondary text-sm">{{ $t('dashboard.basedOn') }} 1,234 {{ $t('dashboard.reviews') }}</p>
           </div>
-        </template>
-      </Card>
-    </div>
+        </div>
+      </template>
+    </Card>
 
     <!-- Timeline Section -->
     <Card class="card-base">
       <template #header>
         <div class="p-4 border-b border-primary">
-          <h3 class="text-lg font-semibold text-primary">{{ $t('dashboard.recentActivity') }}</h3>
+          <h2 class="text-lg font-semibold text-primary">{{ $t('dashboard.recentActivity') }}</h2>
         </div>
       </template>
       <template #content>
         <Timeline :value="timelineEvents" align="left" layout="vertical">
           <template #content="slotProps">
-            <div class="flex flex-col gap-2">
-              <p class="font-semibold text-primary">{{ slotProps.item.status }}</p>
-              <p class="text-secondary text-sm">{{ slotProps.item.date }}</p>
-            </div>
+            <p class="text-secondary">{{ slotProps.item.status }}</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ slotProps.item.date }}</p>
           </template>
         </Timeline>
       </template>
     </Card>
-
-    <!-- Divider -->
-    <Divider />
-
-    <!-- Footer Info -->
-    <div class="text-center py-6">
-      <p class="text-secondary text-sm">
-        {{ $t('dashboard.poweredBy') }}
-      </p>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
@@ -421,15 +423,17 @@ import Timeline from 'primevue/timeline'
 import Divider from 'primevue/divider'
 import { useToast } from 'primevue/usetoast'
 import { useI18n } from 'vue-i18n'
-import { getChartOptions } from '@/utils/chartDarkModePlugin'
 
 const toast = useToast()
 const { t } = useI18n()
 const activeAccordion = ref('0')
 const activeTab = ref('0')
 const userRating = ref(4)
-const chartKey = ref(0) // Force chart re-render on theme toggle
+const chartKey = ref(0)
 const isDarkMode = ref(document.documentElement.classList.contains('dark'))
+const chartDataReady = ref(false)
+
+let observer = null
 
 // Chart Data
 const chartData = ref({
@@ -457,14 +461,136 @@ const pieChartData = ref({
     {
       data: [300, 150, 100, 50],
       backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'],
-      borderColor: ['#1e40af', '#047857', '#d97706', '#b91c1c']
+      borderColor: ['#1e40af', '#047857', '#d97706', '#b91c1c'],
+      borderWidth: 2
     }
   ]
 })
 
-// Computed chart options that respond to dark mode
-const chartOptions = computed(() => {
-  return getChartOptions(isDarkMode.value)
+// Line chart options with proper scaling
+const lineChartOptions = computed(() => {
+  const textColor = isDarkMode.value ? '#e2e8f0' : '#334155'
+  const gridColor = isDarkMode.value ? 'rgba(148, 163, 184, 0.15)' : 'rgba(148, 163, 184, 0.3)'
+  
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: true,
+        position: 'top',
+        labels: {
+          color: textColor,
+          usePointStyle: true,
+          padding: 20,
+          font: {
+            size: 12
+          }
+        }
+      },
+      tooltip: {
+        mode: 'index',
+        intersect: false,
+        backgroundColor: isDarkMode.value ? '#1e293b' : '#ffffff',
+        titleColor: textColor,
+        bodyColor: textColor,
+        borderColor: isDarkMode.value ? '#475569' : '#e2e8f0',
+        borderWidth: 1,
+        padding: 12,
+        cornerRadius: 8
+      }
+    },
+    scales: {
+      x: {
+        display: true,
+        grid: {
+          display: true,
+          color: gridColor,
+          drawBorder: false
+        },
+        ticks: {
+          color: textColor,
+          font: {
+            size: 11
+          }
+        }
+      },
+      y: {
+        display: true,
+        beginAtZero: true,
+        grid: {
+          display: true,
+          color: gridColor,
+          drawBorder: false
+        },
+        ticks: {
+          color: textColor,
+          font: {
+            size: 11
+          },
+          callback: function(value) {
+            return '$' + value.toLocaleString()
+          }
+        }
+      }
+    },
+    interaction: {
+      mode: 'nearest',
+      axis: 'x',
+      intersect: false
+    },
+    elements: {
+      line: {
+        borderWidth: 3
+      },
+      point: {
+        hitRadius: 10,
+        hoverRadius: 8
+      }
+    }
+  }
+})
+
+// Doughnut chart options with proper scaling
+const doughnutChartOptions = computed(() => {
+  const textColor = isDarkMode.value ? '#e2e8f0' : '#334155'
+  
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: true,
+        position: 'right',
+        labels: {
+          color: textColor,
+          usePointStyle: true,
+          padding: 20,
+          font: {
+            size: 12
+          }
+        }
+      },
+      tooltip: {
+        backgroundColor: isDarkMode.value ? '#1e293b' : '#ffffff',
+        titleColor: textColor,
+        bodyColor: textColor,
+        borderColor: isDarkMode.value ? '#475569' : '#e2e8f0',
+        borderWidth: 1,
+        padding: 12,
+        cornerRadius: 8,
+        callbacks: {
+          label: function(context) {
+            const total = context.dataset.data.reduce((a, b) => a + b, 0)
+            const percentage = ((context.parsed / total) * 100).toFixed(1)
+            return `${context.label}: ${context.parsed} (${percentage}%)`
+          }
+        }
+      }
+    },
+    cutout: '60%',
+    radius: '90%'
+  }
 })
 
 // Sample Data
@@ -519,13 +645,22 @@ onMounted(() => {
   // Initialize dark mode state
   isDarkMode.value = document.documentElement.classList.contains('dark')
   
-  // Force initial chart render
-  chartKey.value++
+  // Ensure DOM is ready before rendering charts
+  nextTick(() => {
+    chartDataReady.value = true
+    chartKey.value++
+  })
   
-  const observer = new MutationObserver(() => {
+  observer = new MutationObserver(() => {
     // Update dark mode state and force chart re-render
     isDarkMode.value = document.documentElement.classList.contains('dark')
+    chartDataReady.value = false
     chartKey.value++
+    
+    // Re-render charts after DOM update
+    nextTick(() => {
+      chartDataReady.value = true
+    })
   })
   
   observer.observe(document.documentElement, {
@@ -533,9 +668,34 @@ onMounted(() => {
     attributeFilter: ['class']
   })
 })
+
+onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+  }
+})
 </script>
 
 <style scoped>
+/* Chart container with fixed height for proper scaling */
+.chart-container {
+  position: relative;
+  height: 300px;
+  width: 100%;
+}
+
+/* Ensure PrimeVue Chart component fills container */
+:deep(.p-chart) {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+:deep(.p-chart canvas) {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* DataTable styling */
 :deep(.p-datatable) {
   background: transparent;
 }
