@@ -5,7 +5,7 @@ export function useDarkMode() {
   const isDark = ref(false)
 
   const init = () => {
-    const saved = localStorage.getItem('dark-mode')
+    const saved = sessionStorage.getItem('dark-mode')
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
     isDark.value = saved === 'true' || (!saved && prefersDark)
     applyTheme(isDark.value)
@@ -18,8 +18,8 @@ export function useDarkMode() {
     // Apply to body as well for comprehensive coverage
     document.body.classList.toggle('dark', dark)
     
-    // Persist to localStorage
-    localStorage.setItem('dark-mode', dark)
+    // Persist to sessionStorage
+    sessionStorage.setItem('dark-mode', dark)
     
     // Dispatch custom event for any component that needs to react
     window.dispatchEvent(new CustomEvent('theme-changed', { detail: { isDark: dark } }))
@@ -41,7 +41,7 @@ export function useDarkMode() {
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (e) => {
-      if (!localStorage.getItem('dark-mode')) {
+      if (!sessionStorage.getItem('dark-mode')) {
         isDark.value = e.matches
         applyTheme(e.matches)
       }

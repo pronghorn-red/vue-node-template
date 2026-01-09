@@ -22,7 +22,7 @@ const models = ref([])
 const providers = ref({})
 const availableProviders = ref([])
 const selectedModel = ref(null)
-const streamMethod = ref(localStorage.getItem('llmStreamMethod') || 'ws') // Default to WebSocket
+const streamMethod = ref(sessionStorage.getItem('llmStreamMethod') || 'ws') // Default to WebSocket
 const loading = ref(false)
 const error = ref(null)
 const isInitialized = ref(false)
@@ -116,7 +116,7 @@ export const useLlm = () => {
   const setStreamMethod = (method) => {
     if (method === 'sse' || method === 'ws') {
       streamMethod.value = method
-      localStorage.setItem('llmStreamMethod', method)
+      sessionStorage.setItem('llmStreamMethod', method)
     }
   }
 

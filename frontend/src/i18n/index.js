@@ -9,7 +9,7 @@ const messages = {
 
 const i18n = createI18n({
   legacy: false,
-  locale: localStorage.getItem('language') || 'en',
+  locale: sessionStorage.getItem('language') || 'en',
   fallbackLocale: 'en',
   messages
 })

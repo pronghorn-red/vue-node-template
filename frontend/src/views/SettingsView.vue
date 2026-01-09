@@ -380,10 +380,10 @@ const sessionTimeoutOptions = [
   { label: 'Never', value: 'never' }
 ]
 
-// Load settings from localStorage
+// Load settings from sessionStorage
 const loadSettings = () => {
   try {
-    const saved = localStorage.getItem('userSettings')
+    const saved = sessionStorage.getItem('userSettings')
     if (saved) {
       const parsed = JSON.parse(saved)
       settings.value = { ...defaultSettings, ...parsed }
@@ -395,10 +395,10 @@ const loadSettings = () => {
   }
 }
 
-// Save settings to localStorage
+// Save settings to sessionStorage
 const saveSettings = () => {
   try {
-    localStorage.setItem('userSettings', JSON.stringify(settings.value))
+    sessionStorage.setItem('userSettings', JSON.stringify(settings.value))
     successMessage.value = 'Settings saved'
     setTimeout(() => { successMessage.value = '' }, 2000)
   } catch (err) {
@@ -415,7 +415,7 @@ const handleDarkModeChange = () => {
 // Handle language change
 const handleLanguageChange = () => {
   locale.value = settings.value.language
-  localStorage.setItem('language', settings.value.language)
+  sessionStorage.setItem('language', settings.value.language)
   saveSettings()
 }
 
@@ -442,14 +442,14 @@ const clearCache = () => {
   const preserveKeys = ['user', 'accessToken', 'userSettings', 'language']
   const keysToRemove = []
   
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i)
     if (!preserveKeys.includes(key)) {
       keysToRemove.push(key)
     }
   }
   
-  keysToRemove.forEach(key => localStorage.removeItem(key))
+  keysToRemove.forEach(key => sessionStorage.removeItem(key))
   
   showClearCacheDialog.value = false
   successMessage.value = 'Cache cleared successfully'
@@ -484,7 +484,7 @@ const resetSettings = () => {
   
   // Sync language
   locale.value = settings.value.language
-  localStorage.setItem('language', settings.value.language)
+  sessionStorage.setItem('language', settings.value.language)
   
   saveSettings()
   showResetDialog.value = false

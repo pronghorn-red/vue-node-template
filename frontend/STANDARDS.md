@@ -357,7 +357,7 @@ import fr from './locales/fr.json'
 
 const i18n = createI18n({
   legacy: false,
-  locale: localStorage.getItem('language') || 'en',
+  locale: sessionStorage.getItem('language') || 'en',
   fallbackLocale: 'en',
   messages: { en, fr }
 })
@@ -407,7 +407,7 @@ const title = t('dashboard.title')
 // Change language
 const changeLanguage = (lang) => {
   locale.value = lang
-  localStorage.setItem('language', lang)
+  sessionStorage.setItem('language', lang)
 }
 </script>
 ```
@@ -481,10 +481,10 @@ export function useDarkMode() {
     
     if (isDark.value) {
       document.documentElement.classList.add('dark')
-      localStorage.setItem('dark-mode', 'true')
+      sessionStorage.setItem('dark-mode', 'true')
     } else {
       document.documentElement.classList.remove('dark')
-      localStorage.setItem('dark-mode', 'false')
+      sessionStorage.setItem('dark-mode', 'false')
     }
   }
 
@@ -769,7 +769,7 @@ export function useAuth() {
     error.value = null
     try {
       // Authentication logic
-      localStorage.setItem('user', JSON.stringify(user.value))
+      sessionStorage.setItem('user', JSON.stringify(user.value))
     } catch (err) {
       error.value = err.message
     } finally {
@@ -779,7 +779,7 @@ export function useAuth() {
 
   const signOut = () => {
     user.value = null
-    localStorage.removeItem('user')
+    sessionStorage.removeItem('user')
   }
 
   return { user, isLoggedIn, error, loading, signIn, signOut }
@@ -842,7 +842,7 @@ When implementing Microsoft OAuth:
 
 ### Security Best Practices
 
-- Store sensitive tokens in httpOnly cookies (not localStorage)
+- Store sensitive tokens in httpOnly cookies (not sessionStorage)
 - Implement CSRF protection for state-changing operations
 - Use HTTPS for all communications
 - Implement rate limiting on authentication endpoints
@@ -942,7 +942,7 @@ const instance = axios.create({
 instance.interceptors.request.use(
   (config) => {
     // Add authentication token
-    const token = localStorage.getItem('auth_token')
+    const token = sessionStorage.getItem('auth_token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }

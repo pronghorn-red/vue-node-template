@@ -19,9 +19,9 @@ Chart.register(chartDarkModePlugin, canvasBackgroundPlugin)
 
 const app = createApp(App)
 
-// Initialize dark mode from localStorage or system preference
+// Initialize dark mode from sessionStorage or system preference
 const initDarkMode = () => {
-  const saved = localStorage.getItem('dark-mode')
+  const saved = sessionStorage.getItem('dark-mode')
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
   const isDark = saved === 'true' || (!saved && prefersDark)
   

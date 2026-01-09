@@ -439,7 +439,7 @@ const toggleLanguage = () => {
   const newLanguage = currentLanguage.value === 'en' ? 'fr' : 'en'
   currentLanguage.value = newLanguage
   locale.value = newLanguage
-  localStorage.setItem('language', newLanguage)
+  sessionStorage.setItem('language', newLanguage)
 }
 
 const toggleUserMenu = (event) => {
