@@ -313,7 +313,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useDarkMode } from '@/composables/useDarkMode.js'
 import { useAuth } from '@/composables/useAuth'
 import { useWebSocket } from '@/composables/useWebSocket'
@@ -326,7 +326,7 @@ import { useI18n } from 'vue-i18n'
 const router = useRouter()
 const route = useRoute()
 const { user, isLoggedIn, signOut } = useAuth()
-const { isConnected: wsConnected } = useWebSocket()
+const { isConnected: wsConnected, triggerConnect, shouldBeConnected } = useWebSocket()
 const { locale } = useI18n()
 const { isDark, toggle: toggleDarkMode } = useDarkMode()
 const { t } = useI18n()
@@ -336,6 +336,141 @@ const isMobile = ref(false)
 const userMenuVisible = ref(false)
 const dropdownMenu = ref(null)
 const currentLanguage = ref(locale.value)
+
+// ============================================================================
+// WEBSOCKET CONNECTION MONITOR
+// Progressive backoff: 1s, 3s, 5s, 10s, then every 30s
+// ============================================================================
+
+/** @type {number[]} Reconnection delay schedule in milliseconds */
+const RECONNECT_DELAYS = [1000, 3000, 5000, 10000, 30000]
+
+/** @type {number} Current reconnect attempt index */
+let reconnectAttempt = 0
+
+/** @type {number|null} Timer ID for scheduled reconnect */
+let reconnectTimer = null
+
+/**
+ * Get the next reconnect delay based on attempt number
+ * @returns {number} Delay in milliseconds
+ */
+const getReconnectDelay = () => {
+  const index = Math.min(reconnectAttempt, RECONNECT_DELAYS.length - 1)
+  return RECONNECT_DELAYS[index]
+}
+
+/**
+ * Attempt to reconnect WebSocket if needed
+ * Only reconnects if user is logged in and WebSocket is not connected
+ */
+const attemptReconnect = async () => {
+  // Only reconnect if logged in and not connected
+  if (!isLoggedIn.value || wsConnected.value) {
+    reconnectAttempt = 0
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    return
+  }
+  
+  console.log(`🔄 WebSocket reconnect attempt ${reconnectAttempt + 1}`)
+  
+  try {
+    await triggerConnect()
+    // Success - reset counter
+    reconnectAttempt = 0
+    console.log('✅ WebSocket reconnected successfully')
+  } catch (err) {
+    console.warn('WebSocket reconnect failed:', err.message)
+    reconnectAttempt++
+    scheduleReconnect()
+  }
+}
+
+/**
+ * Schedule the next reconnect attempt
+ * Clears any existing timer before scheduling
+ */
+const scheduleReconnect = () => {
+  // Clear any existing timer
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+  }
+  
+  // Don't schedule if not logged in
+  if (!isLoggedIn.value) {
+    return
+  }
+  
+  const delay = getReconnectDelay()
+  reconnectTimer = setTimeout(() => {
+    attemptReconnect()
+  }, delay)
+}
+
+/**
+ * Start monitoring WebSocket connection
+ * Checks immediately if connection is needed
+ */
+const startConnectionMonitor = () => {
+  // Check immediately if we should connect
+  if (shouldBeConnected()) {
+    attemptReconnect()
+  }
+}
+
+/**
+ * Stop monitoring and clear all timers
+ * Called on logout or component unmount
+ */
+const stopConnectionMonitor = () => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  reconnectAttempt = 0
+}
+
+// Watch for login state changes
+// Note: useAuth already triggers WebSocket connect after login,
+// so we only need to handle logout and disconnection recovery
+watch(isLoggedIn, (loggedIn) => {
+  if (loggedIn) {
+    // User just logged in - reset attempt counter
+    // Don't call startConnectionMonitor here as useAuth already triggers connect
+    reconnectAttempt = 0
+  } else {
+    // User logged out - stop monitoring
+    stopConnectionMonitor()
+  }
+})
+
+// Watch for disconnections while logged in
+// This handles cases where connection drops after initial connect
+watch(wsConnected, (connected) => {
+  if (!connected && isLoggedIn.value) {
+    // Disconnected while logged in - schedule reconnect
+    // Add small delay to avoid race with other reconnect attempts
+    setTimeout(() => {
+      if (!wsConnected.value && isLoggedIn.value) {
+        scheduleReconnect()
+      }
+    }, 100)
+  } else if (connected) {
+    // Connected - reset attempt counter and clear any pending timers
+    reconnectAttempt = 0
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+})
+
+// ============================================================================
+// ROLE CONFIGURATION
+// ============================================================================
 
 // Role configuration
 const ROLE_COLORS = {
@@ -349,6 +484,10 @@ const ROLE_LABELS = {
   admin: 'Admin',
   user: 'User'
 }
+
+// ============================================================================
+// COMPUTED PROPERTIES
+// ============================================================================
 
 // Computed properties
 const userInitials = computed(() => {
@@ -404,6 +543,10 @@ const sidebarNavItems = computed(() => {
   return items
 })
 
+// ============================================================================
+// LIFECYCLE & EVENT HANDLERS
+// ============================================================================
+
 // Check if mobile on mount and on resize
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 1024
@@ -423,12 +566,23 @@ onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
   document.addEventListener('click', handleClickOutside)
+  
+  // Note: We don't call startConnectionMonitor() here because:
+  // - useAuth.js triggers WebSocket connect after successful login
+  // - The wsConnected watcher handles reconnection if connection drops
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   document.removeEventListener('click', handleClickOutside)
+  
+  // Stop WebSocket connection monitor
+  stopConnectionMonitor()
 })
+
+// ============================================================================
+// ACTIONS
+// ============================================================================
 
 // Check if route is active
 const isActiveRoute = (path) => {

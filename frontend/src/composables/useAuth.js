@@ -1,6 +1,10 @@
 /**
- * @fileoverview useAuth Composable
+ * @fileoverview useAuth Composable - v2
  * @description Authentication composable with JWT token management.
+ * 
+ * FIXES in v2:
+ * - Calls triggerConnect() on WebSocket after successful login
+ * - Ensures WebSocket connects immediately when auth completes
  * 
  * Token Storage Strategy:
  * - Access token: Stored in sessionStorage (accessible to JS for Authorization header)
@@ -90,8 +94,8 @@ const saveAuth = (userData, accessToken) => {
   // Set token in API defaults
   api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`
   
-  // Update WebSocket if connected
-  notifyWebSocket()
+  // Trigger WebSocket connection now that we have auth (v2)
+  triggerWebSocketConnect()
 }
 
 /**
@@ -125,7 +129,21 @@ const decodeToken = (tokenStr) => {
 }
 
 /**
- * Notify WebSocket of auth state change
+ * Trigger WebSocket connection after auth (v2)
+ * Called after successful login, signup, OAuth, or session recovery
+ */
+const triggerWebSocketConnect = () => {
+  if (webSocketRef?.triggerConnect) {
+    console.log('🔌 Triggering WebSocket connect after auth...')
+    webSocketRef.triggerConnect().catch(err => {
+      console.warn('WebSocket connect after auth failed:', err.message)
+    })
+  }
+}
+
+/**
+ * Notify WebSocket of auth state change (legacy - kept for compatibility)
+ * @deprecated Use triggerWebSocketConnect instead
  */
 const notifyWebSocket = () => {
   // WebSocket will pick up new token from sessionStorage on next connect/auth
@@ -200,7 +218,7 @@ const recoverSession = async () => {
     const userResponse = await api.get('/auth/me')
     const userData = userResponse.data.user
     
-    // Save auth state
+    // Save auth state (this will also trigger WebSocket connect)
     saveAuth(userData, newToken)
     
     console.log('✅ Session recovered from cookie')
@@ -236,6 +254,9 @@ const initializeAuth = async () => {
       console.log('User role missing, fetching fresh profile...')
       await fetchFullUserProfile()
     }
+    
+    // Trigger WebSocket connect for stored auth (v2)
+    triggerWebSocketConnect()
     
     return true
   }
@@ -281,7 +302,7 @@ export function useAuth() {
         fullUserData = meResponse.data.user
       }
       
-      // Save complete auth state
+      // Save complete auth state (this will also trigger WebSocket connect)
       saveAuth(fullUserData, accessToken)
       
       return true
@@ -325,6 +346,7 @@ export function useAuth() {
         fullUserData = meResponse.data.user
       }
       
+      // Save auth state (this will also trigger WebSocket connect)
       saveAuth(fullUserData, accessToken)
       return true
     } catch (err) {
@@ -373,7 +395,7 @@ export function useAuth() {
       const response = await api.get('/auth/me')
       const userData = response.data.user
       
-      // Save auth state
+      // Save auth state (this will also trigger WebSocket connect)
       saveAuth(userData, accessToken)
       
       return true
@@ -413,8 +435,8 @@ export function useAuth() {
         sessionStorage.setItem(STORAGE_KEYS.accessToken, newToken)
         api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
         
-        // Notify WebSocket of new token
-        notifyWebSocket()
+        // Trigger WebSocket reconnect with new token (v2)
+        triggerWebSocketConnect()
         
         return true
       }
@@ -440,8 +462,11 @@ export function useAuth() {
     clearAuth()
     
     // Logout from WebSocket too
-    if (webSocketRef?.value?.logout) {
-      webSocketRef.value.logout()
+    if (webSocketRef?.logout) {
+      webSocketRef.logout()
+    }
+    if (webSocketRef?.disconnect) {
+      webSocketRef.disconnect()
     }
   }
 

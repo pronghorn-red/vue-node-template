@@ -1,5 +1,5 @@
 /**
- * @fileoverview useWebSocket Composable - v2
+ * @fileoverview useWebSocket Composable - v3
  * @description Central WebSocket connection manager with authentication,
  * domain-based message routing, and task management.
  * 
@@ -8,6 +8,12 @@
  * - Efficient event-driven token monitoring instead of interval polling
  * - WebSocket connects automatically when token becomes available after login
  * - Improved token refresh coordination with auth composable
+ * 
+ * FIXES in v3:
+ * - Added triggerConnect() for manual connection after login
+ * - Removed ineffective Vue watch on sessionStorage (not reactive)
+ * - AppLayout monitors connection and triggers reconnects with backoff
+ * - Cleaner separation of concerns
  * 
  * Token Strategy:
  * - Reads access token from sessionStorage (set by useAuth)
@@ -18,7 +24,7 @@
  * Supports parallel task execution with client-generated taskIds
  */
 
-import { ref, computed, shallowRef, reactive, watch } from 'vue'
+import { ref, computed, shallowRef, reactive } from 'vue'
 
 // ============================================================================
 // CONFIGURATION
@@ -65,7 +71,7 @@ let heartbeatInterval = null
 let reconnectTimeout = null
 let isInitialized = false
 let tokenRefreshCallback = null // Callback to refresh token
-let tokenWatcher = null // Watch for token changes
+let isConnecting = false // Guard to prevent multiple simultaneous connection attempts
 
 // ============================================================================
 // TOKEN MANAGEMENT
@@ -133,48 +139,6 @@ const refreshTokenAndReconnect = async () => {
   }
 }
 
-/**
- * Watch for token changes using Vue's reactive system
- * This ensures WebSocket connects when user logs in
- */
-const setupTokenWatcher = () => {
-  if (tokenWatcher) return // Already watching
-  
-  // Create a reactive ref that tracks the token
-  const currentToken = ref(getAuthToken())
-  
-  // Watch for changes to the token
-  tokenWatcher = watch(
-    () => getAuthToken(),
-    (newToken) => {
-      currentToken.value = newToken
-      
-      if (newToken && !isConnected.value) {
-        // Token became available - connect WebSocket
-        console.log('🔐 Token detected, connecting WebSocket...')
-        connect().catch(err => {
-          console.error('Failed to connect WebSocket after token:', err)
-        })
-      } else if (!newToken && isConnected.value) {
-        // Token was removed - disconnect
-        console.log('🔐 Token removed, disconnecting WebSocket...')
-        disconnect()
-      }
-    },
-    { immediate: false }
-  )
-}
-
-/**
- * Stop watching for token changes
- */
-const stopWatchingToken = () => {
-  if (tokenWatcher) {
-    tokenWatcher()
-    tokenWatcher = null
-  }
-}
-
 // ============================================================================
 // UTILITIES
 // ============================================================================
@@ -195,14 +159,30 @@ const generateTaskId = (prefix = 'task') => {
 /**
  * Send a message through WebSocket
  * @param {Object} message - Message object
- * @throws {Error} If not connected
+ * @returns {boolean} True if message was sent successfully
+ * @throws {Error} If not connected and throwOnError is true
  */
-const sendMessage = (message) => {
-  if (!ws.value || ws.value.readyState !== WebSocket.OPEN) {
-    throw new Error('WebSocket not connected')
+const sendMessage = (message, throwOnError = true) => {
+  // Check both our state flag and the actual WebSocket state
+  const socketReady = ws.value && ws.value.readyState === WebSocket.OPEN
+  
+  if (!socketReady) {
+    if (throwOnError) {
+      throw new Error('WebSocket not connected')
+    }
+    return false
   }
   
-  ws.value.send(JSON.stringify(message))
+  try {
+    ws.value.send(JSON.stringify(message))
+    return true
+  } catch (err) {
+    console.error('Failed to send WebSocket message:', err)
+    if (throwOnError) {
+      throw err
+    }
+    return false
+  }
 }
 
 /**
@@ -414,6 +394,7 @@ const updateTaskFromMessage = (taskId, data) => {
 
 /**
  * Connect to WebSocket server
+ * Includes guard to prevent multiple simultaneous connection attempts
  * @returns {Promise<void>}
  */
 const connect = async () => {
@@ -423,12 +404,20 @@ const connect = async () => {
     return
   }
   
+  // Prevent multiple simultaneous connection attempts
+  if (isConnecting) {
+    console.log('WebSocket connection already in progress')
+    return
+  }
+  
   // Check for token
   const token = getAuthToken()
   if (!token) {
     console.log('⏳ No auth token available, WebSocket will connect after login')
     return
   }
+  
+  isConnecting = true
   
   return new Promise((resolve, reject) => {
     try {
@@ -442,13 +431,19 @@ const connect = async () => {
       ws.value.onopen = () => {
         console.log('✅ WebSocket connected')
         isConnected.value = true
+        isConnecting = false
         reconnectAttempts.value = 0
         
         // Start heartbeat
         startHeartbeat()
         
-        // Authenticate with token
-        authenticate(token)
+        // Authenticate with token (don't await - let it happen async)
+        // The authenticate function now waits for socket to be ready
+        authenticate(token).catch(err => {
+          console.error('WebSocket authentication failed:', err.message)
+          // Don't disconnect - the connection is still valid
+          // User can retry auth or the app can handle unauthenticated state
+        })
         
         resolve()
       }
@@ -458,20 +453,25 @@ const connect = async () => {
       ws.value.onerror = (error) => {
         console.error('❌ WebSocket error:', error)
         isConnected.value = false
+        isConnecting = false
         reject(error)
       }
       
       ws.value.onclose = () => {
         console.log('🔌 WebSocket disconnected')
         isConnected.value = false
+        isConnecting = false
         isAuthenticated.value = false
         stopHeartbeat()
         
-        // Attempt reconnect
-        attemptReconnect()
+        // Only auto-reconnect if we have a token (user still logged in)
+        if (getAuthToken()) {
+          attemptReconnect()
+        }
       }
     } catch (error) {
       console.error('Failed to create WebSocket:', error)
+      isConnecting = false
       reject(error)
     }
   })
@@ -528,10 +528,10 @@ const startHeartbeat = () => {
   
   heartbeatInterval = setInterval(() => {
     if (isConnected.value && ws.value?.readyState === WebSocket.OPEN) {
-      try {
-        sendMessage({ type: 'ping' })
-      } catch (err) {
-        console.error('Failed to send heartbeat:', err)
+      // Use non-throwing version for heartbeat
+      const sent = sendMessage({ type: 'ping' }, false)
+      if (!sent) {
+        console.warn('Failed to send heartbeat - connection may be stale')
       }
     }
   }, CONFIG.heartbeatInterval)
@@ -553,24 +553,53 @@ const stopHeartbeat = () => {
 
 /**
  * Authenticate with server
+ * Waits for WebSocket to be ready before sending auth message
  * @param {string} token - JWT token
+ * @param {number} [maxRetries=3] - Maximum number of retry attempts
  * @returns {Promise<void>}
  */
-const authenticate = async (token) => {
-  if (!isConnected.value) {
-    throw new Error('WebSocket not connected')
+const authenticate = async (token, maxRetries = 3) => {
+  let retries = 0
+  
+  // Wait for WebSocket to be truly ready (readyState === OPEN)
+  const waitForReady = () => {
+    return new Promise((resolve, reject) => {
+      const maxWait = 5000
+      const checkInterval = 50
+      let waited = 0
+      
+      const check = () => {
+        if (ws.value && ws.value.readyState === WebSocket.OPEN) {
+          resolve()
+        } else if (waited >= maxWait) {
+          reject(new Error('WebSocket not ready for authentication'))
+        } else {
+          waited += checkInterval
+          setTimeout(check, checkInterval)
+        }
+      }
+      
+      check()
+    })
   }
   
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error('Authentication timeout'))
-    }, 5000)
-    
-    try {
-      sendMessage({
+  const attemptAuth = () => {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Authentication timeout'))
+      }, 5000)
+      
+      // Try to send auth message
+      const sent = sendMessage({
         type: 'auth:login',
         token
-      })
+      }, false) // Don't throw on error
+      
+      if (!sent) {
+        clearTimeout(timeout)
+        reject(new Error('Failed to send auth message'))
+        return
+      }
       
       // Wait for auth:success message
       const checkAuth = setInterval(() => {
@@ -580,11 +609,32 @@ const authenticate = async (token) => {
           resolve()
         }
       }, 100)
+    })
+  }
+  
+  // Wait for socket to be ready first
+  try {
+    await waitForReady()
+  } catch (err) {
+    console.error('WebSocket not ready for auth:', err.message)
+    throw err
+  }
+  
+  // Attempt authentication with retries
+  while (retries < maxRetries) {
+    try {
+      await attemptAuth()
+      return // Success
     } catch (err) {
-      clearTimeout(timeout)
-      reject(err)
+      retries++
+      if (retries >= maxRetries) {
+        console.error(`Authentication failed after ${maxRetries} attempts:`, err.message)
+        throw err
+      }
+      console.warn(`Auth attempt ${retries} failed, retrying...`)
+      await new Promise(r => setTimeout(r, 500 * retries)) // Backoff
     }
-  })
+  }
 }
 
 /**
@@ -726,6 +776,38 @@ const addDomainListener = (domain, callback) => {
 }
 
 // ============================================================================
+// MANUAL CONNECTION TRIGGER (v3)
+// ============================================================================
+
+/**
+ * Manually trigger WebSocket connection
+ * Called by useAuth after successful login, or by AppLayout for reconnection
+ * Resets reconnect attempts to allow fresh connection attempt
+ * @returns {Promise<void>}
+ */
+const triggerConnect = async () => {
+  // Reset reconnect attempts for fresh connection attempt
+  reconnectAttempts.value = 0
+  
+  // Clear any pending reconnect
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout)
+    reconnectTimeout = null
+  }
+  
+  return connect()
+}
+
+/**
+ * Check if WebSocket should be connected (has token but not connected)
+ * Useful for connection monitors to determine if reconnection is needed
+ * @returns {boolean}
+ */
+const shouldBeConnected = () => {
+  return !!getAuthToken() && !isConnected.value
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 
@@ -735,9 +817,6 @@ const addDomainListener = (domain, callback) => {
 const initWebSocket = () => {
   if (isInitialized) return
   isInitialized = true
-  
-  // Start watching for token changes using Vue's reactive system
-  setupTokenWatcher()
   
   // Only connect if we have a token (user is logged in)
   const token = getAuthToken()
@@ -802,6 +881,8 @@ export const useWebSocket = () => {
     connect,
     disconnect,
     ensureConnected,
+    triggerConnect,      // v3: Manual connection trigger
+    shouldBeConnected,   // v3: Check if should be connected
     sendMessage,
     
     // Auth methods
