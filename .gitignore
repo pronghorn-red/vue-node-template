@@ -4,3 +4,6 @@
 /backend/logs
 /frontend/dist
 /.env
+.DS_Store
+.idea/
+.vscode/
